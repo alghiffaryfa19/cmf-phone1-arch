@@ -29,7 +29,7 @@ used through [libhybris](https://github.com/libhybris/libhybris).
 | Mobile data (LTE) | ✅ | ModemManager with our plugin for the MediaTek modem; IPv4 only for now |
 | SIM PIN, SMS receive | ✅ | Chats (Chatty) |
 | SMS send | ❓ | Not tested |
-| Calls | ❓ | GNOME Calls is installed but not tested yet. No VoLTE (needs MediaTek's IMS stack), so calls need a 2G/3G fallback |
+| Calls | ❌ | Incoming calls don't ring: the modem falls back to 2G for the call but never reports it to Linux. Probably a MediaTek init command is missing. No VoLTE (needs MediaTek's IMS stack). Help welcome |
 | Standby (suspend) | ❌ | The SoC hangs in deep sleep. The screen can still turn off, but the CPU stays awake |
 | Fingerprint, NFC, GPS | ❌ | Not started |
 
