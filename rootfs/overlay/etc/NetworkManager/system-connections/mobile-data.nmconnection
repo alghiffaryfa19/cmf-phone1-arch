@@ -1,0 +1,17 @@
+# Mobile data for any SIM. No APN: the modem then uses the APN the network attached LTE
+# with, which is the internet APN on most networks. (gsm.auto-config looks the APN up by
+# operator id, but many virtual operators share one id, e.g. 262-03, and it picks wrong.)
+# Set gsm.apn here if your provider needs a different one.
+# Phosh's mobile data switch turns it on and off. IPv4 only for now.
+[connection]
+id=Mobile data
+type=gsm
+autoconnect=true
+
+[gsm]
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=disabled

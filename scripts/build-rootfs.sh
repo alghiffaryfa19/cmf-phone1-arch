@@ -74,7 +74,7 @@ mkdir -p "$MNT/vendor"; rm -rf "$MNT/vendor/firmware"
 cp -a "$OUT/vendor-extract/vendor/firmware" "$MNT/vendor/"; chown -R 0:0 "$MNT/vendor"
 chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d"
 chmod 0440 "$MNT/etc/sudoers.d/10-wheel"
-chmod 0600 "$MNT/etc/NetworkManager/conf.d/"*.conf
+chmod 0600 "$MNT/etc/NetworkManager/conf.d/"*.conf "$MNT/etc/NetworkManager/system-connections/"*.nmconnection
 
 # The project key (out/ssh, used by scripts/phone-ssh.sh; created here if missing) and the
 # host user's ssh keys, so `ssh alarm@172.16.42.1` works without a password
