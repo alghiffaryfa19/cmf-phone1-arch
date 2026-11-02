@@ -1,0 +1,15 @@
+[Unit]
+Description=Power on MTK WLAN (wlan0)
+After=tetris-phosh.service
+ConditionPathExists=/dev/wmtWifi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/tetris-wlan-on
+ExecStop=/bin/sh -c 'echo 0 > /dev/wmtWifi'
+ExecStartPost=-/usr/bin/nmcli device set wlan0 managed yes
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

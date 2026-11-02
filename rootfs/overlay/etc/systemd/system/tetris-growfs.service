@@ -1,0 +1,13 @@
+[Unit]
+Description=Grow the root filesystem to the whole userdata partition (first boot)
+ConditionPathExists=!/var/lib/tetris-growfs.done
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'resize2fs "$(findmnt -no SOURCE /)" && touch /var/lib/tetris-growfs.done'
+
+[Install]
+WantedBy=sysinit.target

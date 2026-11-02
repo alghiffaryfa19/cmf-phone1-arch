@@ -1,0 +1,33 @@
+# Phosh 0.57 ships only phosh-session (for a display manager); autologin alarm on tty7
+# the way the old upstream phosh.service did.
+[Unit]
+Description=Phosh mobile shell (autologin alarm)
+After=systemd-user-sessions.service plymouth-quit-wait.service dbus.socket ModemManager.service tetris-android.service
+Wants=dbus.socket tetris-android.service
+Conflicts=getty@tty7.service
+
+[Service]
+Type=simple
+User=alarm
+WorkingDirectory=~
+PAMName=login
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty7
+UtmpMode=user
+Environment=XDG_SESSION_TYPE=wayland XDG_SESSION_CLASS=user XDG_SESSION_DESKTOP=phosh XDG_CURRENT_DESKTOP=Phosh:GNOME
+# logind only activates the session if tty7 is the foreground VT (getty sits on tty1)
+ExecStartPre=+/usr/bin/chvt 7
+# GPU Phosh (hwcomposer + Mali through libhybris) or software Phosh, with crash guard
+ExecStartPre=+/usr/local/bin/tetris-phosh-select
+ExecStart=/usr/local/bin/tetris-phosh-session
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

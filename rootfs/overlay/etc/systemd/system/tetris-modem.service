@@ -1,0 +1,17 @@
+[Unit]
+Description=CMF Phone 1 modem (boot through the Android container, AT bridge for ModemManager)
+After=tetris-android.service
+Wants=tetris-android.service
+
+[Service]
+# In this order and without Before=ModemManager: booting the modem takes ~35 s and Phosh waits
+# for ModemManager. ttyMD0 only appears once the modem is up; ModemManager picks it and ccmni1 up by hotplug.
+ExecStartPre=/usr/local/bin/tetris-android-start-modem
+ExecStartPre=/usr/bin/modprobe tetris_mdtty
+ExecStartPre=/usr/bin/udevadm trigger --action=add /sys/class/net/ccmni1
+ExecStart=/usr/local/bin/tetris-mdtty-bridge
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

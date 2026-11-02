@@ -1,0 +1,9 @@
+// The camera app (tetris-camera-app) starts and stops the camera stack on demand.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "tetris-camera.service" &&
+        (action.lookup("verb") == "start" || action.lookup("verb") == "stop") &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

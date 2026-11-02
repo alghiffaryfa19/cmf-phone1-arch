@@ -1,0 +1,16 @@
+[Unit]
+Description=Disable the mcusysoff and system-vcore idle states (reset the phone without USB + display)
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# With the display off the SoC reaches these states for real, and once the USB clocks are off
+# too (role none) the phone dies: no log, bootreason kernel_panic. Disabling only system-vcore
+# was enough while USB kept univpll on. Root cause unknown; costs some idle power.
+ExecStart=/bin/sh -c 'for s in /sys/devices/system/cpu/cpu*/cpuidle/state*; do case "$(cat $s/name)" in mcusysoff*|system-vcore) echo 1 > $s/disable;; esac; done; true'
+
+[Install]
+WantedBy=basic.target

@@ -1,0 +1,30 @@
+diff --git a/sound/soc/codecs/mt6369.c b/sound/soc/codecs/mt6369.c
+index baaa346..b6d7a24 100644
+--- a/sound/soc/codecs/mt6369.c
++++ b/sound/soc/codecs/mt6369.c
+@@ -5602,6 +5602,16 @@ static const struct soc_enum misc_control_enum[] = {
+ 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(off_on_function), off_on_function),
+ };
+ 
++/* Without a get, reading the control fails with -EPERM, and that makes
++ * snd_mixer_load() (PipeWire's jack detection) fail for the whole card.
++ */
++static int mt6369_rcv_acc_get(struct snd_kcontrol *kcontrol,
++			      struct snd_ctl_elem_value *ucontrol)
++{
++	ucontrol->value.integer.value[0] = 0;
++	return 0;
++}
++
+ static int mt6369_rcv_acc_set(struct snd_kcontrol *kcontrol,
+ 			      struct snd_ctl_elem_value *ucontrol)
+ {
+@@ -5802,7 +5812,7 @@ static const struct snd_kcontrol_new mt6369_snd_misc_controls[] = {
+ 		       SND_SOC_NOPM, 0, 0x10000, 0,
+ 		       hp_impedance_get, NULL),
+ 	SOC_ENUM_EXT("PMIC_REG_CLEAR", misc_control_enum[0],
+-		     NULL, mt6369_rcv_acc_set),
++		     mt6369_rcv_acc_get, mt6369_rcv_acc_set),
+ 	SOC_ENUM_EXT("DMic Used", misc_control_enum[0], dmic_used_get, NULL),
+ #if IS_ENABLED(CONFIG_MTK_VOW_SUPPORT)
+ 	SOC_ENUM_EXT("VOW PBUF Channel", misc_control_enum[0], vow_pbuf_ch_get, NULL),

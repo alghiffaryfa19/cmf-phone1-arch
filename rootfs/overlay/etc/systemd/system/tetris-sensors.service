@@ -1,0 +1,11 @@
+[Unit]
+Description=Sensor proxy for the SCP sensor hub (net.hadess.SensorProxy, replaces iio-sensor-proxy)
+
+[Service]
+Type=dbus
+BusName=net.hadess.SensorProxy
+ExecStart=/usr/local/bin/tetris-sensors
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

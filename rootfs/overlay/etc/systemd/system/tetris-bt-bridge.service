@@ -1,0 +1,16 @@
+[Unit]
+Description=MTK Bluetooth (/dev/stpbt) to BlueZ bridge via /dev/vhci
+# Opening /dev/stpbt powers BT on; conninfra's pre-calibration (needed for WLAN) is
+# skipped while BT is on, so only start once WLAN is up.
+After=tetris-wlan.service
+Before=bluetooth.service
+Wants=bluetooth.service
+ConditionPathExists=/dev/stpbt
+
+[Service]
+ExecStart=/usr/local/bin/tetris-bt-start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

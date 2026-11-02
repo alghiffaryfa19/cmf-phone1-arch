@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+# Mount the APEXes of the Halium GSI (and the vendor) on the host's /apex, which the
+# container binds in (lxc config). libhybris's linker also finds bionic there, at
+# /apex/com.android.runtime/lib64. Replaces Android's apexd for our read-only case.
+#
+# An .apex is a zip whose apex_payload.img is stored uncompressed, so it can be
+# loop-mounted straight out of the zip at its data offset.
+#
+# Usage: tetris-mount-apexes <dir-with-apexes> ...
+import os, struct, subprocess, sys, zipfile
+
+APEX_ROOT = "/apex"
+
+
+def manifest_name(pb: bytes) -> str:
+    # apex_manifest.pb: field 1 (name) is a length-delimited string, tag 0x0a
+    i = 0
+    while i < len(pb):
+        tag = pb[i]; i += 1
+        if tag & 7 == 2:
+            ln = shift = 0
+            while True:
+                b = pb[i]; i += 1
+                ln |= (b & 0x7f) << shift; shift += 7
+                if not b & 0x80:
+                    break
+            if tag >> 3 == 1:
+                return pb[i:i + ln].decode()
+            i += ln
+        elif tag & 7 == 0:
+            while pb[i] & 0x80:
+                i += 1
+            i += 1
+        else:
+            break
+    raise ValueError("no name in apex_manifest.pb")
+
+
+def payload_offset(path: str, zi: zipfile.ZipInfo) -> int:
+    if zi.compress_type != zipfile.ZIP_STORED:
+        raise ValueError(f"{path}: compressed payload, can't loop-mount")
+    with open(path, "rb") as f:
+        f.seek(zi.header_offset)
+        hdr = f.read(30)
+        name_len, extra_len = struct.unpack_from("<HH", hdr, 26)
+    return zi.header_offset + 30 + name_len + extra_len
+
+
+def mount_apex(path: str) -> None:
+    if os.path.isdir(path):         # flattened APEX
+        name = manifest_name(open(os.path.join(path, "apex_manifest.pb"), "rb").read())
+        src, opts = path, "bind,ro"
+    else:
+        with zipfile.ZipFile(path) as z:
+            name = manifest_name(z.read("apex_manifest.pb"))
+            off = payload_offset(path, z.getinfo("apex_payload.img"))
+        src, opts = path, f"loop,ro,offset={off}"
+    target = os.path.join(APEX_ROOT, name)
+    if os.path.ismount(target):
+        return
+    os.makedirs(target, exist_ok=True)
+    subprocess.run(["mount", "-o", opts, src, target], check=True)
+    print(f"{name} <- {path}")
+
+
+def main() -> int:
+    if not os.path.ismount(APEX_ROOT):
+        os.makedirs(APEX_ROOT, exist_ok=True)
+        subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=755", "apex", APEX_ROOT], check=True)
+    rc = 0
+    for d in sys.argv[1:]:
+        if not os.path.isdir(d):
+            continue
+        for e in sorted(os.listdir(d)):
+            if e.endswith(".capex") or e.endswith("_compressed.apex"):
+                print(f"skip compressed {e}", file=sys.stderr)
+                continue
+            try:
+                mount_apex(os.path.join(d, e))
+            except Exception as ex:      # one bad APEX shouldn't stop the rest
+                print(f"{e}: {ex}", file=sys.stderr)
+                rc = 1
+    return rc
+
+
+sys.exit(main())

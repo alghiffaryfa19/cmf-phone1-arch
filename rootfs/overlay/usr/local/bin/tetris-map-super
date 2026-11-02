@@ -1,0 +1,90 @@
+#!/usr/bin/python3
+# Map Android dynamic partitions (system_a, vendor_a, ...) from the "super" partition to
+# /dev/mapper/<name> with dm-linear, like Android's first-stage init does.
+# Parses the LP ("liblp") metadata directly; read-only use of super.
+#
+# Usage: tetris-map-super [--slot a|b] [--list] [name ...]   (default: all of the slot)
+import argparse, os, struct, subprocess, sys
+
+SUPER = "/dev/disk/by-partlabel/super"
+SECTOR = 512
+GEOMETRY_OFF = 4096             # LP_PARTITION_RESERVED_BYTES
+GEOMETRY_SIZE = 4096            # LP_METADATA_GEOMETRY_SIZE
+GEOMETRY_MAGIC = 0x616C4467
+HEADER_MAGIC = 0x414C5030
+TARGET_LINEAR, TARGET_ZERO = 0, 1
+
+
+def read_metadata(f):
+    f.seek(GEOMETRY_OFF)
+    g = f.read(52)
+    magic, _size = struct.unpack_from("<II", g, 0)
+    if magic != GEOMETRY_MAGIC:
+        sys.exit("super: bad LP geometry magic")
+    max_size, slot_count, lbs = struct.unpack_from("<III", g, 40)
+    # primary metadata, slot 0 (all slots carry the same tables on retrofit-less devices)
+    f.seek(GEOMETRY_OFF + 2 * GEOMETRY_SIZE)
+    h = f.read(256)
+    magic, major, minor, header_size = struct.unpack_from("<IHHI", h, 0)
+    if magic != HEADER_MAGIC:
+        sys.exit("super: bad LP metadata header magic")
+    tables_size = struct.unpack_from("<I", h, 44)[0]
+    descs = [struct.unpack_from("<III", h, 80 + 12 * i) for i in range(4)]
+    f.seek(GEOMETRY_OFF + 2 * GEOMETRY_SIZE + header_size)
+    t = f.read(tables_size)
+
+    def entries(desc):
+        off, num, size = desc
+        return [t[off + i * size: off + (i + 1) * size] for i in range(num)]
+
+    parts = []
+    for e in entries(descs[0]):
+        name = e[:36].split(b"\0")[0].decode()
+        _attr, first, num, _group = struct.unpack_from("<IIII", e, 36)
+        parts.append((name, first, num))
+    extents = [struct.unpack_from("<QIQI", e, 0) for e in entries(descs[1])]
+    return parts, extents
+
+
+def dm_table(first, num, extents, dev):
+    lines, start = [], 0
+    for sectors, ttype, data, _src in extents[first:first + num]:
+        if ttype == TARGET_LINEAR:
+            lines.append(f"{start} {sectors} linear {dev} {data}")
+        elif ttype == TARGET_ZERO:
+            lines.append(f"{start} {sectors} zero")
+        else:
+            raise ValueError(f"unknown extent type {ttype}")
+        start += sectors
+    return "\n".join(lines) + "\n", start
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--slot", default="a", choices="ab")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("names", nargs="*", help="partitions without slot suffix (default: all)")
+    a = ap.parse_args()
+    dev = os.path.realpath(SUPER)
+    with open(dev, "rb") as f:
+        parts, extents = read_metadata(f)
+    suffix = "_" + a.slot
+    for name, first, num in parts:
+        if not name.endswith(suffix):
+            continue
+        base = name[:-2]
+        if a.names and base not in a.names:
+            continue
+        table, sectors = dm_table(first, num, extents, dev)
+        if a.list:
+            print(f"{name}: {sectors * SECTOR // (1 << 20)} MiB, {num} extent(s)")
+            continue
+        if sectors <= 8:            # placeholder of the inactive slot
+            continue
+        if os.path.exists(f"/dev/mapper/{name}"):
+            continue
+        subprocess.run(["dmsetup", "create", "--readonly", name], input=table.encode(), check=True)
+        print(f"/dev/mapper/{name}")
+
+
+main()

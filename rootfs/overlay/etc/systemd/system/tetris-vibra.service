@@ -1,0 +1,9 @@
+[Unit]
+Description=Vibration motor as force-feedback input device (for feedbackd)
+
+[Service]
+ExecStart=/usr/local/bin/tetris-vibra
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

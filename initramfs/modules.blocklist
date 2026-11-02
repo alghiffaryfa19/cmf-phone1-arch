@@ -1,0 +1,5 @@
+# Modules the debug initramfs must not load (one basename per line).
+# apusys hangs the boot after apu_top powers the APU (AI unit; not needed on Linux).
+apu_top.ko
+apusys.ko
+sapu.ko

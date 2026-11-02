@@ -1,0 +1,7 @@
+#!/bin/sh
+# ExecStart of tetris-phosh (as alarm): run the Phosh variant tetris-phosh-select chose.
+if [ "$(cat /run/tetris-phosh/mode 2>/dev/null)" = gpu ]; then
+    exec /usr/local/bin/tetris-phosh-session-hwc
+fi
+export WLR_RENDERER=pixman
+exec /usr/bin/phosh-session

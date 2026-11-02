@@ -1,0 +1,13 @@
+#!/bin/sh
+# Launcher for the camera app: starts the camera stack (polkit lets the session user),
+# runs the app on libhybris, and stops the stack again when the app quits.
+systemctl start tetris-camera.service || exit 1
+# Not hybris.env: its LD_LIBRARY_PATH swaps gtk's EGL/Vulkan for libhybris' (heap
+# corruption at startup). The NDK camera libs need the system's libbinder-based libs,
+# so /system goes before /vendor.
+export HYBRIS_LD_LIBRARY_PATH=/opt/tetris-hybris-compat/lib64:/system/lib64:/vendor/lib64:/vendor/lib64/egl:/odm/lib64
+# GTK on libhybris' EGL crashes once Android threads come and go; draw in software
+GSK_RENDERER=cairo GDK_DISABLE=gl,vulkan /usr/local/lib/tetris-camera-app/kamera "$@"
+ret=$?
+systemctl stop tetris-camera.service
+exit $ret

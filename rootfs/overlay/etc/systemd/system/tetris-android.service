@@ -1,0 +1,15 @@
+[Unit]
+Description=Halium Android container (graphics HALs for libhybris)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/tetris-android-prepare
+ExecStart=/usr/bin/lxc-start -F -n android -l DEBUG -o /var/log/lxc-android.log
+ExecStartPost=-/usr/local/bin/tetris-android-start-hals
+ExecStop=-/usr/bin/lxc-stop -n android -k
+OOMScoreAdjust=-1000
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

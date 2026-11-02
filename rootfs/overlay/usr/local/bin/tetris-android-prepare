@@ -1,0 +1,106 @@
+#!/bin/sh
+# Prepare everything the Halium 16 container (lxc "android") needs on the host:
+# GSI rootfs, the device's vendor/odm/vendor_dlkm from super, APEXes, binderfs,
+# property and socket dirs, and the vendor init allowlist.
+set -e
+A=/var/lib/lxc/android
+T=/var/lib/tetris-android
+log() { echo "tetris-android-prepare: $*"; }
+
+mkdir -p "$A/rootfs" "$T/system" /android/data /dev/__properties__ /dev/socket /odm /vendor_dlkm "$T/vendor"
+# init recreates the property area and its sockets; stale ones from a previous
+# container run make the new init crash
+rm -rf /dev/__properties__/* /dev/socket/*
+
+# GSI read-only underneath, a fresh writable overlay on top: Android's init needs to
+# create directories in / (SetupMountNamespaces fails on a read-only root).
+mountpoint -q "$T/system" || mount -o loop,ro "$A/system.img" "$T/system"
+if ! mountpoint -q "$A/rootfs"; then
+    rm -rf "$T/upper" "$T/work"; mkdir -p "$T/upper" "$T/work"
+    mount -t overlay -o lowerdir="$T/system",upperdir="$T/upper",workdir="$T/work" android-root "$A/rootfs"
+fi
+# The software Codec2 store lives in the swcodec APEX, whose services the Halium init never
+# starts. Declared, it blocks droidmedia's camera service (HEIC check) forever.
+rm -f "$A/rootfs/system/etc/vintf/manifest/manifest_media_c2_software.xml"
+# libmeminfo (pulled in by the NDK camera/media libs) aborts at load on API 36 unless
+# netbpfload.rc starts with "# x y <api> <minor> <z> #" (api >= 36); this GSI has no tethering
+# APEX, so provide the header (init parses it as an empty rc file).
+echo "# 0 0 36 0 0 #" > "$A/rootfs/system/etc/init/netbpfload.rc"
+
+# Device partitions from super (stock Nothing OS slot a, read-only)
+tetris-map-super --slot a vendor odm vendor_dlkm >/dev/null
+mountpoint -q "$T/vendor"   || mount -t erofs -o ro /dev/mapper/vendor_a "$T/vendor"
+mountpoint -q /odm          || mount -t erofs -o ro /dev/mapper/odm_a /odm
+mountpoint -q /vendor_dlkm  || mount -t erofs -o ro /dev/mapper/vendor_dlkm_a /vendor_dlkm
+
+# Vendor init allowlist: the container only sees the rc files listed in
+# /etc/tetris-android/vendor-init.allow. The stock vendor init would otherwise
+# reconfigure USB (init.mt6878.usb.rc), power WLAN/BT on and off, load stock kernel
+# modules, start the audio HAL, ... - all things the Linux side owns now.
+rm -rf "$T/vendor-init"; mkdir -p "$T/vendor-init/hw"
+while read -r f; do
+    case "$f" in ''|\#*) continue ;; esac
+    cp "$T/vendor/etc/init/$f" "$T/vendor-init/$f" && log "vendor init: $f"
+done < /etc/tetris-android/vendor-init.allow
+
+if ! mountpoint -q /dev/binderfs; then
+    mkdir -p /dev/binderfs
+    mount -t binder binder /dev/binderfs
+fi
+# libbinder on the host (libhybris clients) opens the classic /dev/*binder paths;
+# without them it falls back to RPC binder and waits for ever on rpc_servicemanager
+for n in binder hwbinder vndbinder; do
+    [ -e /dev/$n ] || ln -sf /dev/binderfs/$n /dev/$n
+    # world-accessible like on Android: phoc (user alarm) talks to the HALs
+    chmod 0666 /dev/binderfs/$n
+done
+
+tetris-mount-apexes "$A/rootfs/system/apex" "$T/vendor/apex" || log "some APEXes failed"
+
+# Host view for libhybris, which loads Android libs from literal /system/lib64 and
+# /vendor/lib64 (+ bionic from /apex). /vendor already holds our extracted firmware
+# copy; the stock vendor image carries the same /vendor/firmware, so it can go on top.
+# It points at the container's overlay, so host-only fixups below are visible to both.
+ln -sfn "$A/rootfs/system" /system
+mountpoint -q /vendor || mount --bind "$T/vendor" /vendor
+# Android's libcutils validates ashmem fds against /dev/ashmem<boot_id> (init creates it
+# in the container); libhybris clients on the host need the same name.
+ln -sf ashmem "/dev/ashmem$(cat /proc/sys/kernel/random/boot_id)"
+
+# The Mali driver and MTK mapper link android.hardware.graphics.common-V4-ndk.so, which
+# no partition ships (stock system has V6, the GSI V7). Stable AIDL NDK libs only grow,
+# so V7 serves V4's users; it's on HYBRIS_LD_LIBRARY_PATH (/etc/tetris-android/hybris.env).
+mkdir -p /opt/tetris-hybris-compat/lib64
+ln -sf /system/lib64/android.hardware.graphics.common-V7-ndk.so \
+    /opt/tetris-hybris-compat/lib64/android.hardware.graphics.common-V4-ndk.so
+# Library dir for phoc on libhybris: only the GL/hwc2 pieces. The full
+# /opt/libhybris/lib also ships libvulkan.so.1 and libOpenCL.so.1, which shadow the
+# system loaders wlroots links and crash phoc at startup.
+G=/opt/tetris-hybris-gl/lib
+mkdir -p "$G"
+for l in libEGL.so.1 libGLESv2.so.2 libGLESv1_CM.so.1 libhwc2.so.1 libhybris-common.so.1 \
+        libhybris-eglplatformcommon.so.1 libhybris-platformcommon.so.1 \
+        libhybris-hwcomposerwindow.so.1 libsync.so.2 libhardware.so.2 libgralloc.so.1 \
+        libandroid-properties.so.1 libui.so.1 libhybris; do
+    ln -sfn "/opt/libhybris/lib/$l" "$G/$l"
+done
+# Modem: device nodes and partitions for the container, owned like Android's ueventd
+# does it (ccci_mdinit runs as system:radio). Generated: the node set is driver-defined.
+C=/run/tetris-android-modem.conf
+: > "$C"
+for n in /dev/ccci* /dev/ttyC*; do
+    [ -c "$n" ] || continue
+    chown 1000:1001 "$n"; chmod 0660 "$n"
+    echo "lxc.mount.entry = $n dev/${n#/dev/} none bind,create=file 0 0" >> "$C"
+done
+for p in nvram nvdata nvcfg protect1 protect2 persist proinfo; do
+    n=$(readlink -f "/dev/disk/by-partlabel/$p") || continue
+    echo "lxc.mount.entry = $n dev/block/by-name/$p none bind,create=file 0 0" >> "$C"
+done
+# Camera: V4L2/media nodes plus MediaTek's camera helpers for the camera HAL
+# (owners set by 78-tetris-camera.rules, as in vendor ueventd.rc).
+for n in /dev/video* /dev/media* /dev/v4l-subdev* /dev/mtk_ccd /dev/mtk_hcp /dev/mtk_mdp \
+        /dev/mdp_sync /dev/camera-pda /dev/ccu* /dev/vcu /dev/mtk_aov /dev/camera_eeprom*; do
+    [ -c "$n" ] && echo "lxc.mount.entry = $n dev/${n#/dev/} none bind,create=file 0 0" >> "$C"
+done
+log "ready"

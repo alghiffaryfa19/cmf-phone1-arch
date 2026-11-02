@@ -1,0 +1,11 @@
+[Unit]
+Description=Flash LEDs as torch LED class device (white:torch, for Phosh)
+
+[Service]
+# insmod, not modprobe: depmod over the whole vendor module set picks wrong duplicates
+ExecStartPre=-/usr/bin/insmod /usr/lib/modules/%v/extra/uleds.ko
+ExecStart=/usr/local/bin/tetris-torch
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

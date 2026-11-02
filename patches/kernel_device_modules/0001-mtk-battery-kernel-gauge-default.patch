@@ -1,0 +1,61 @@
+diff --git a/drivers/power/nt_supply/mtk_battery.c b/drivers/power/nt_supply/mtk_battery.c
+index 73c1b10..7532c83 100755
+--- a/drivers/power/nt_supply/mtk_battery.c
++++ b/drivers/power/nt_supply/mtk_battery.c
+@@ -4422,6 +4422,12 @@ int battery_init(struct platform_device *pdev)
+ 		fg_check_bat_id(pdev, gm);
+ 	fg_custom_init_from_header(gm);
+ 	fg_custom_init_from_dts(pdev, gm);
++	/*
++	 * Before the coulomb IRQs get requested, and not in mtk_battery_daemon_init():
++	 * that returns early without the daemon, leaving wait_que uninitialized for
++	 * the coulomb IRQ's wake_up (NULL dereference in __wake_up_common).
++	 */
++	mtk_irq_thread_init(gm);
+ 	gauge_coulomb_service_init(gm);
+ 	gm->coulomb_plus.callback = fg_coulomb_int_h_handler;
+ 	gauge_coulomb_consumer_init(&gm->coulomb_plus, &pdev->dev, "car+1%");
+diff --git a/drivers/power/nt_supply/mtk_battery.h b/drivers/power/nt_supply/mtk_battery.h
+index fa4e83f..a806666 100755
+--- a/drivers/power/nt_supply/mtk_battery.h
++++ b/drivers/power/nt_supply/mtk_battery.h
+@@ -1243,5 +1243,6 @@ extern void disable_all_irq(struct mtk_battery *gm);
+ 
+ /*mtk_battery_daemon.c*/
+ extern void wake_up_bat_irq_controller(struct irq_controller *irq_ctrl, int flags);
++extern void mtk_irq_thread_init(struct mtk_battery *gm);
+ /*mtk_battery_daemon.c end*/
+ #endif /* __MTK_BATTERY_INTF_H__ */
+diff --git a/drivers/power/nt_supply/mtk_battery_daemon.c b/drivers/power/nt_supply/mtk_battery_daemon.c
+index 36fae14..33ee530 100755
+--- a/drivers/power/nt_supply/mtk_battery_daemon.c
++++ b/drivers/power/nt_supply/mtk_battery_daemon.c
+@@ -5271,9 +5271,18 @@ static int mtk_battery_resume(struct mtk_battery *gm)
+ 	return 0;
+ }
+ 
++/*
++ * Tetris Linux: Android's fuelgauged never runs here, so default to the in-kernel
++ * gauge algorithm (battery_algo_init(), otherwise only used in recovery mode).
++ * Boot with <module>.fg_daemon=1 to get the stock daemon/netlink mode back.
++ */
++static bool fg_daemon;
++module_param(fg_daemon, bool, 0444);
++MODULE_PARM_DESC(fg_daemon, "use the Android fuelgauged daemon instead of the kernel gauge algorithm");
++
+ bool is_daemon_support(struct mtk_battery *gm)
+ {
+-	bool is_support = true;
++	bool is_support = fg_daemon;
+ 
+ 	pr_notice("%s: is_support = %d\n", __func__, is_support);
+ 	return is_support;
+@@ -5308,8 +5317,6 @@ int mtk_battery_daemon_init(struct platform_device *pdev)
+ 	gm->resume = mtk_battery_resume;
+ 	fg_cust_data = &gm->fg_cust_data;
+ 
+-	mtk_irq_thread_init(gm);
+-
+ 	if (hw_version == GAUGE_NO_HW) {
+ 		gm->gauge->sw_nafg_irq = nafg_irq_handler;
+ 		gm->gauge->sw_vbat_h_irq = sw_vbat_h_irq_handler;

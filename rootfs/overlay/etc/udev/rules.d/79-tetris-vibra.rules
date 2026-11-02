@@ -1,0 +1,2 @@
+# tetris-vibra's uinput force-feedback device is the phone's vibration motor for feedbackd
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}=="1", SUBSYSTEMS=="input", ATTRS{name}=="tetris-vibra", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"

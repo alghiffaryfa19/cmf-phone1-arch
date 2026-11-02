@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kamera
+Comment=Fotos mit Haupt-, Zweit- und Frontkamera
+Exec=tetris-camera-app
+Icon=camera-photo
+Categories=Graphics;Photography;
+X-Purism-FormFactor=Workstation;Mobile;

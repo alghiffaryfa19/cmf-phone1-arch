@@ -1,0 +1,9 @@
+# CMF Phone 1 modem for ModemManager: AT through the tetris_mdtty pair (the bridge owns
+# ttyMD1), data on ccmni1. Both are virtual devices, so they need explicit tagging.
+KERNEL=="ttyMD0", SUBSYSTEM=="tty", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_CANDIDATE}="1", ENV{ID_MM_PHYSDEV_UID}="tetris-modem", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
+KERNEL=="ttyMD1", SUBSYSTEM=="tty", ENV{ID_MM_DEVICE_IGNORE}="1"
+# ccmni1 exists from boot, ttyMD0 only once the modem is up (tetris-modem.service). Alone,
+# ModemManager would reject ccmni1 and ignore it for good, so keep it hidden until then:
+# the service re-triggers it right after loading tetris_mdtty.
+KERNEL=="ccmni1", SUBSYSTEM=="net", TEST=="/sys/class/tty/ttyMD0", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_CANDIDATE}="1", ENV{ID_MM_PHYSDEV_UID}="tetris-modem"
+KERNEL=="ccmni1", SUBSYSTEM=="net", TEST!="/sys/class/tty/ttyMD0", ENV{ID_MM_DEVICE_IGNORE}="1"

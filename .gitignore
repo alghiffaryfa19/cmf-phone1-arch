@@ -1,0 +1,28 @@
+# Whitelist: only our own sources are published. Never add firmware/ (stock Nothing OS
+# images), stock-info/ (device dumps incl. IMEI/serials), downloads/, toolchain/, src/
+# (fetched by scripts/fetch-sources.sh) or out/ (builds, ssh keys, modem backups).
+/*
+!/.gitignore
+!/LICENSE
+!/README.md
+!/docs/
+!/scripts/
+!/pkgbuilds/
+!/patches/
+!/kernel/
+!/initramfs/
+!/rootfs/
+
+# build products of the out-of-tree modules and tools
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.a
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+rootfs/src/tetris-camera-app/kamera
+rootfs/src/tetris-camera-app/tetris-cam2probe

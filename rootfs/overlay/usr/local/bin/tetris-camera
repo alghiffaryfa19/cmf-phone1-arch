@@ -1,0 +1,32 @@
+#!/bin/sh
+# Start/stop the camera stack in the Halium container (on demand, it costs power):
+#   android-hardware-media-c2-hal-1-2 Codec2 HAL; minimedia blocks on it at startup
+#   camerahalserver                   MediaTek camera HAL (AIDL camera provider)
+#   minimedia                         droidmedia's camera service (media.camera)
+# The MediaTek power HAL the camera HAL also needs runs from boot (tetris-android-start-hals):
+# it takes ~90 s to register, and every HAL call waits 5 s while it's missing.
+# Usage: tetris-camera start|stop|status   (start returns once media.camera is up)
+A="lxc-attach -n android --"
+SVCS="android-hardware-media-c2-hal-1-2 camerahalserver minimedia"
+case "${1:-status}" in
+start)
+    for s in $SVCS; do
+        $A /system/bin/setprop ctl.start "$s"
+        [ "$s" = camerahalserver ] && sleep 3   # provider must be up before minimedia
+    done
+    for i in $(seq 60); do
+        $A /system/bin/service check media.camera 2>/dev/null | grep -q ': found' && exit 0
+        sleep 1
+    done
+    echo "media.camera did not come up" >&2
+    exit 1 ;;
+stop)
+    for s in minimedia camerahalserver android-hardware-media-c2-hal-1-2; do
+        $A /system/bin/setprop ctl.stop "$s"
+    done ;;
+status)
+    for s in vendor.mtkpower-service.mediatek $SVCS; do
+        echo "$s: $($A /system/bin/getprop "init.svc.$s")"
+    done ;;
+*) echo "usage: $0 start|stop|status" >&2; exit 1 ;;
+esac

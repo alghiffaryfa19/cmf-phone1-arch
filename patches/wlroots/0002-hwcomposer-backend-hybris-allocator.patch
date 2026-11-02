@@ -1,0 +1,1466 @@
+From: tetris <tetris@localhost>
+Subject: [PATCH] hwcomposer backend + hybris gralloc allocator for libhybris (CMF Phone 1 port)
+
+---
+ backend/backend.c                |   9 ++
+ backend/hwcomposer/backend.c     | 228 ++++++++++++++++++++++++++++++++++++++
+ backend/hwcomposer/meson.build   |  20 ++++
+ backend/hwcomposer/output.c      | 230 +++++++++++++++++++++++++++++++++++++++
+ backend/meson.build              |   1 +
+ include/backend/hwcomposer.h     | 110 +++++++++++++++++++
+ include/render/egl.h             |   2 +
+ include/render/hybris.h          |  38 +++++++
+ include/wlr/backend/hwcomposer.h |  26 +++++
+ meson.build                      |   1 +
+ meson.options                    |   1 +
+ render/allocator/allocator.c     |   9 ++
+ render/allocator/hybris.c        | 218 +++++++++++++++++++++++++++++++++++++
+ render/egl.c                     |  54 +++++++++
+ render/gles2/pass.c              |   9 ++
+ render/gles2/renderer.c          |  58 ++++++++--
+ render/gles2/texture.c           |  14 +++
+ render/hybris_wl_buffer.c        | 137 +++++++++++++++++++++++
+ render/wlr_renderer.c            |  38 ++++++-
+ 19 files changed, 1193 insertions(+), 10 deletions(-)
+
+diff --git a/backend/backend.c b/backend/backend.c
+index 3d84aa6..c4c0bb2 100644
+--- a/backend/backend.c
++++ b/backend/backend.c
+@@ -11,6 +11,7 @@
+ #include <wlr/config.h>
+ #include <wlr/render/wlr_renderer.h>
+ #include <wlr/util/log.h>
++#include "config.h"
+ #include "types/wlr_output.h"
+ #include "util/env.h"
+ #include "util/time.h"
+@@ -32,6 +33,10 @@
+ #include <wlr/backend/x11.h>
+ #endif
+ 
++#if HAVE_HWCOMPOSER
++#include <wlr/backend/hwcomposer.h>
++#endif
++
+ #define WAIT_SESSION_TIMEOUT 10000 // ms
+ 
+ void wlr_backend_init(struct wlr_backend *backend,
+@@ -297,6 +302,10 @@ static bool attempt_backend_by_name(struct wl_event_loop *loop,
+ 		backend = attempt_x11_backend(loop, NULL);
+ 	} else if (strcmp(name, "headless") == 0) {
+ 		backend = attempt_headless_backend(loop);
++#if HAVE_HWCOMPOSER
++	} else if (strcmp(name, "hwcomposer") == 0) {
++		backend = wlr_hwcomposer_backend_create(loop);
++#endif
+ 	} else if (strcmp(name, "drm") == 0 || strcmp(name, "libinput") == 0) {
+ 		// DRM and libinput need a session
+ 		if (*session_ptr == NULL) {
+diff --git a/backend/hwcomposer/backend.c b/backend/hwcomposer/backend.c
+new file mode 100644
+index 0000000..3620a85
+--- /dev/null
++++ b/backend/hwcomposer/backend.c
+@@ -0,0 +1,228 @@
++#include <assert.h>
++#include <dlfcn.h>
++#include <drm_fourcc.h>
++#include <inttypes.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <unistd.h>
++#include <wlr/backend/hwcomposer.h>
++#include <wlr/backend/multi.h>
++#include <wlr/util/log.h>
++#include "backend/hwcomposer.h"
++
++/*
++ * Android hwcomposer backend: the display is driven by the composer HAL (HWC2,
++ * through libhybris' libhwc2), wlroots renders with GLES on libhybris' EGL into
++ * gralloc buffers (render/allocator/hybris.c) that are presented as the HWC2
++ * client target.
++ */
++
++static const struct wlr_backend_impl backend_impl;
++
++struct wlr_hwcomposer_backend *hwcomposer_backend_from_backend(
++		struct wlr_backend *wlr_backend) {
++	assert(wlr_backend_is_hwcomposer(wlr_backend));
++	struct wlr_hwcomposer_backend *backend = wl_container_of(wlr_backend, backend, backend);
++	return backend;
++}
++
++bool wlr_backend_is_hwcomposer(struct wlr_backend *backend) {
++	return backend->impl == &backend_impl;
++}
++
++static void find_hwcomposer(struct wlr_backend *backend, void *data) {
++	bool *found = data;
++	*found = *found || wlr_backend_is_hwcomposer(backend);
++}
++
++bool wlr_backend_has_hwcomposer(struct wlr_backend *backend) {
++	if (wlr_backend_is_multi(backend)) {
++		bool found = false;
++		wlr_multi_for_each_backend(backend, find_hwcomposer, &found);
++		return found;
++	}
++	return wlr_backend_is_hwcomposer(backend);
++}
++
++static bool backend_start(struct wlr_backend *wlr_backend) {
++	struct wlr_hwcomposer_backend *backend = hwcomposer_backend_from_backend(wlr_backend);
++	wlr_log(WLR_INFO, "Starting hwcomposer backend");
++
++	backend->output = hwcomposer_output_create(backend);
++	if (backend->output == NULL) {
++		return false;
++	}
++	backend->started = true;
++	wl_signal_emit_mutable(&backend->backend.events.new_output,
++		&backend->output->wlr_output);
++	return true;
++}
++
++static void backend_destroy(struct wlr_backend *wlr_backend) {
++	if (!wlr_backend) {
++		return;
++	}
++	struct wlr_hwcomposer_backend *backend = hwcomposer_backend_from_backend(wlr_backend);
++
++	wlr_backend_finish(wlr_backend);
++	if (backend->output != NULL) {
++		wlr_output_destroy(&backend->output->wlr_output);
++	}
++	if (backend->display != NULL) {
++		backend->hwc2.display_set_power_mode(backend->display, HWC2_POWER_MODE_OFF);
++	}
++	wlr_drm_format_set_finish(&backend->primary_formats);
++	wl_list_remove(&backend->event_loop_destroy.link);
++	// libhwc2 stays loaded: its binder threads may still call into it
++	free(backend);
++}
++
++static const struct wlr_backend_impl backend_impl = {
++	.start = backend_start,
++	.destroy = backend_destroy,
++};
++
++static void handle_event_loop_destroy(struct wl_listener *listener, void *data) {
++	struct wlr_hwcomposer_backend *backend =
++		wl_container_of(listener, backend, event_loop_destroy);
++	backend_destroy(&backend->backend);
++}
++
++/* HWC2 callbacks arrive on binder threads; only hotplug needs handling, and
++ * libhwc2 wants it fed back into the device (as libhybris' own tests do). */
++static void handle_vsync(struct hwc2_event_listener *listener, int32_t seq,
++		hwc2_display_t display, int64_t timestamp) {
++}
++
++static void handle_hotplug(struct hwc2_event_listener *listener, int32_t seq,
++		hwc2_display_t display, bool connected, bool primary) {
++	struct wlr_hwcomposer_backend *backend = wl_container_of(listener, backend, listener);
++	wlr_log(WLR_INFO, "hwcomposer: hotplug display %"PRIu64" connected=%d primary=%d",
++		display, connected, primary);
++	backend->hwc2.device_on_hotplug(backend->device, display, connected);
++}
++
++static void handle_refresh(struct hwc2_event_listener *listener, int32_t seq,
++		hwc2_display_t display) {
++}
++
++static bool load_hwc2(struct hwc2_api *api) {
++	// libhybris' libhwc2 (needs libhybris' libraries on the library path)
++	api->lib = dlopen("libhwc2.so.1", RTLD_NOW | RTLD_GLOBAL);
++	if (api->lib == NULL) {
++		wlr_log(WLR_ERROR, "hwcomposer: cannot load libhwc2.so.1: %s", dlerror());
++		return false;
++	}
++
++	// memcpy: object pointer -> function pointer without type punning
++#define LOAD(field, sym) do { \
++		void *addr = dlsym(api->lib, sym); \
++		if (addr == NULL) { \
++			wlr_log(WLR_ERROR, "hwcomposer: libhwc2 lacks %s", sym); \
++			return false; \
++		} \
++		memcpy(&api->field, &addr, sizeof(addr)); \
++	} while (0)
++	LOAD(device_new, "hwc2_compat_device_new");
++	LOAD(device_register_callback, "hwc2_compat_device_register_callback");
++	LOAD(device_on_hotplug, "hwc2_compat_device_on_hotplug");
++	LOAD(device_get_display_by_id, "hwc2_compat_device_get_display_by_id");
++	LOAD(display_get_active_config, "hwc2_compat_display_get_active_config");
++	LOAD(display_accept_changes, "hwc2_compat_display_accept_changes");
++	LOAD(display_create_layer, "hwc2_compat_display_create_layer");
++	LOAD(display_get_release_fences, "hwc2_compat_display_get_release_fences");
++	LOAD(display_present, "hwc2_compat_display_present");
++	LOAD(display_set_client_target, "hwc2_compat_display_set_client_target");
++	LOAD(display_set_power_mode, "hwc2_compat_display_set_power_mode");
++	LOAD(display_validate, "hwc2_compat_display_validate");
++	LOAD(layer_set_blend_mode, "hwc2_compat_layer_set_blend_mode");
++	LOAD(layer_set_composition_type, "hwc2_compat_layer_set_composition_type");
++	LOAD(layer_set_display_frame, "hwc2_compat_layer_set_display_frame");
++	LOAD(layer_set_source_crop, "hwc2_compat_layer_set_source_crop");
++	LOAD(layer_set_visible_region, "hwc2_compat_layer_set_visible_region");
++	LOAD(out_fences_destroy, "hwc2_compat_out_fences_destroy");
++#undef LOAD
++	return true;
++}
++
++struct wlr_backend *wlr_hwcomposer_backend_create(struct wl_event_loop *loop) {
++	wlr_log(WLR_INFO, "Creating hwcomposer backend");
++
++	struct wlr_hwcomposer_backend *backend = calloc(1, sizeof(*backend));
++	if (backend == NULL) {
++		wlr_log(WLR_ERROR, "Failed to allocate wlr_hwcomposer_backend");
++		return NULL;
++	}
++
++	if (!load_hwc2(&backend->hwc2)) {
++		free(backend);
++		return NULL;
++	}
++
++	backend->device = backend->hwc2.device_new(false);
++	if (backend->device == NULL) {
++		wlr_log(WLR_ERROR, "hwcomposer: cannot connect to the composer HAL");
++		free(backend);
++		return NULL;
++	}
++	backend->listener = (struct hwc2_event_listener){
++		.on_vsync_received = handle_vsync,
++		.on_hotplug_received = handle_hotplug,
++		.on_refresh_received = handle_refresh,
++	};
++	backend->hwc2.device_register_callback(backend->device, &backend->listener, 0);
++
++	// The primary display shows up through the (asynchronous) hotplug callback
++	for (int i = 0; i < 50 && backend->display == NULL; i++) {
++		backend->display = backend->hwc2.device_get_display_by_id(backend->device, 0);
++		if (backend->display == NULL) {
++			nanosleep(&(struct timespec){ .tv_nsec = 100 * 1000 * 1000 }, NULL);
++		}
++	}
++	if (backend->display == NULL) {
++		wlr_log(WLR_ERROR, "hwcomposer: primary display did not appear");
++		free(backend);
++		return NULL;
++	}
++
++	backend->hwc2.display_set_power_mode(backend->display, HWC2_POWER_MODE_ON);
++	struct hwc2_display_config *config =
++		backend->hwc2.display_get_active_config(backend->display);
++	if (config == NULL) {
++		wlr_log(WLR_ERROR, "hwcomposer: no active display config");
++		free(backend);
++		return NULL;
++	}
++	backend->config = *config;
++	wlr_log(WLR_INFO, "hwcomposer: display %"PRId32"x%"PRId32", vsync %"PRId64" ns, "
++		"dpi %.1fx%.1f", config->width, config->height, config->vsync_period,
++		config->dpi_x, config->dpi_y);
++
++	// One full-screen client-composited layer; wlroots composites everything
++	backend->layer = backend->hwc2.display_create_layer(backend->display);
++	int w = config->width, h = config->height;
++	backend->hwc2.layer_set_composition_type(backend->layer, HWC2_COMPOSITION_CLIENT);
++	backend->hwc2.layer_set_blend_mode(backend->layer, HWC2_BLEND_MODE_NONE);
++	backend->hwc2.layer_set_source_crop(backend->layer, 0.0f, 0.0f, w, h);
++	backend->hwc2.layer_set_display_frame(backend->layer, 0, 0, w, h);
++	backend->hwc2.layer_set_visible_region(backend->layer, 0, 0, w, h);
++
++	// XRGB/ARGB first: wlroots prefers them for primary buffers (HAL BGRA_8888)
++	wlr_drm_format_set_add(&backend->primary_formats, DRM_FORMAT_XRGB8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&backend->primary_formats, DRM_FORMAT_ARGB8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&backend->primary_formats, DRM_FORMAT_XBGR8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&backend->primary_formats, DRM_FORMAT_ABGR8888,
++		DRM_FORMAT_MOD_INVALID);
++
++	wlr_backend_init(&backend->backend, &backend_impl);
++	backend->backend.buffer_caps = WLR_BUFFER_CAP_DMABUF;
++	backend->event_loop = loop;
++	backend->event_loop_destroy.notify = handle_event_loop_destroy;
++	wl_event_loop_add_destroy_listener(loop, &backend->event_loop_destroy);
++
++	return &backend->backend;
++}
+diff --git a/backend/hwcomposer/meson.build b/backend/hwcomposer/meson.build
+new file mode 100644
+index 0000000..a283368
+--- /dev/null
++++ b/backend/hwcomposer/meson.build
+@@ -0,0 +1,20 @@
++# Android hwcomposer backend (libhybris' libhwc2 is dlopen()ed at runtime) and the
++# gralloc allocator it renders into. Needs the gles2 renderer.
++if get_option('hwcomposer').disabled()
++	subdir_done()
++endif
++if not internal_features['egl']
++	if get_option('hwcomposer').enabled()
++		error('The hwcomposer backend needs the GLES2 renderer (EGL)')
++	endif
++	subdir_done()
++endif
++
++wlr_files += files(
++	'backend.c',
++	'output.c',
++	'../../render/allocator/hybris.c',
++	'../../render/hybris_wl_buffer.c',
++)
++wlr_deps += cc.find_library('dl', required: false)
++internal_features += { 'hwcomposer': true }
+diff --git a/backend/hwcomposer/output.c b/backend/hwcomposer/output.c
+new file mode 100644
+index 0000000..0ad4f8d
+--- /dev/null
++++ b/backend/hwcomposer/output.c
+@@ -0,0 +1,230 @@
++#include <assert.h>
++#include <inttypes.h>
++#include <poll.h>
++#include <stdlib.h>
++#include <time.h>
++#include <unistd.h>
++#include <wlr/backend/hwcomposer.h>
++#include <wlr/interfaces/wlr_output.h>
++#include <wlr/types/wlr_output_layer.h>
++#include <wlr/util/log.h>
++#include "backend/hwcomposer.h"
++#include "render/hybris.h"
++#include "types/wlr_output.h"
++
++static const uint32_t SUPPORTED_OUTPUT_STATE =
++	WLR_OUTPUT_STATE_BACKEND_OPTIONAL |
++	WLR_OUTPUT_STATE_BUFFER |
++	WLR_OUTPUT_STATE_ENABLED |
++	WLR_OUTPUT_STATE_MODE;
++
++static const struct wlr_output_impl output_impl;
++
++bool wlr_output_is_hwcomposer(struct wlr_output *wlr_output) {
++	return wlr_output->impl == &output_impl;
++}
++
++static struct wlr_hwcomposer_output *hwcomposer_output_from_output(
++		struct wlr_output *wlr_output) {
++	assert(wlr_output_is_hwcomposer(wlr_output));
++	struct wlr_hwcomposer_output *output = wl_container_of(wlr_output, output, wlr_output);
++	return output;
++}
++
++static bool output_test(struct wlr_output *wlr_output,
++		const struct wlr_output_state *state) {
++	struct wlr_hwcomposer_output *output = hwcomposer_output_from_output(wlr_output);
++	struct hwc2_display_config *config = &output->backend->config;
++
++	uint32_t unsupported = state->committed & ~SUPPORTED_OUTPUT_STATE;
++	if (unsupported != 0) {
++		wlr_log(WLR_DEBUG, "Unsupported output state fields: 0x%"PRIx32, unsupported);
++		return false;
++	}
++	if (state->committed & WLR_OUTPUT_STATE_MODE) {
++		int32_t width = state->mode_type == WLR_OUTPUT_STATE_MODE_FIXED ?
++			state->mode->width : state->custom_mode.width;
++		int32_t height = state->mode_type == WLR_OUTPUT_STATE_MODE_FIXED ?
++			state->mode->height : state->custom_mode.height;
++		if (width != config->width || height != config->height) {
++			wlr_log(WLR_DEBUG, "hwcomposer: only the native mode is supported");
++			return false;
++		}
++	}
++	// Only our own gralloc buffers can be client targets (no direct scan-out
++	// of client buffers)
++	if ((state->committed & WLR_OUTPUT_STATE_BUFFER) &&
++			!wlr_buffer_is_hybris(state->buffer)) {
++		return false;
++	}
++	if (state->committed & WLR_OUTPUT_STATE_LAYERS) {
++		for (size_t i = 0; i < state->layers_len; i++) {
++			state->layers[i].accepted = false;
++		}
++	}
++	return true;
++}
++
++static bool present_buffer(struct wlr_hwcomposer_output *output, struct wlr_buffer *buffer) {
++	struct wlr_hwcomposer_backend *backend = output->backend;
++	struct hwc2_api *hwc2 = &backend->hwc2;
++
++	uint32_t num_types = 0, num_requests = 0;
++	hwc2_error_t err = hwc2->display_validate(backend->display, &num_types, &num_requests);
++	if (err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES) {
++		wlr_log(WLR_ERROR, "hwcomposer: validate failed (%d)", err);
++		return false;
++	}
++	if (num_types || num_requests) {
++		err = hwc2->display_accept_changes(backend->display);
++		if (err != HWC2_ERROR_NONE) {
++			wlr_log(WLR_ERROR, "hwcomposer: accept changes failed (%d)", err);
++			return false;
++		}
++	}
++
++	// The gles2 render pass glFinish()es hybris buffers, so no acquire fence
++	err = hwc2->display_set_client_target(backend->display,
++		wlr_hybris_buffer_get_slot(buffer), wlr_hybris_buffer_get_native(buffer),
++		-1, HAL_DATASPACE_UNKNOWN);
++	if (err != HWC2_ERROR_NONE) {
++		wlr_log(WLR_ERROR, "hwcomposer: set client target failed (%d)", err);
++		return false;
++	}
++
++	int32_t present_fence = -1;
++	err = hwc2->display_present(backend->display, &present_fence);
++	if (err != HWC2_ERROR_NONE) {
++		wlr_log(WLR_ERROR, "hwcomposer: present failed (%d)", err);
++		return false;
++	}
++	void *fences = NULL;
++	if (hwc2->display_get_release_fences(backend->display, &fences) == HWC2_ERROR_NONE &&
++			fences != NULL) {
++		hwc2->out_fences_destroy(fences);
++	}
++	// The present fence signals once this frame is on screen, i.e. the composer
++	// is done with the previous client target. Waiting here (bounded, about a
++	// refresh) keeps the swapchain from handing that buffer back to the renderer
++	// while it's still being scanned out, which showed up as glitches.
++	if (present_fence >= 0) {
++		struct pollfd pfd = { .fd = present_fence, .events = POLLIN };
++		if (poll(&pfd, 1, 50) <= 0) {
++			wlr_log(WLR_DEBUG, "hwcomposer: present fence not signalled in 50 ms");
++		}
++		close(present_fence);
++	}
++	return true;
++}
++
++static bool output_commit(struct wlr_output *wlr_output,
++		const struct wlr_output_state *state) {
++	struct wlr_hwcomposer_output *output = hwcomposer_output_from_output(wlr_output);
++	struct wlr_hwcomposer_backend *backend = output->backend;
++
++	if (!output_test(wlr_output, state)) {
++		return false;
++	}
++
++	if (state->committed & WLR_OUTPUT_STATE_ENABLED) {
++		backend->hwc2.display_set_power_mode(backend->display,
++			state->enabled ? HWC2_POWER_MODE_ON : HWC2_POWER_MODE_OFF);
++	}
++
++	if (!output_pending_enabled(wlr_output, state)) {
++		return true;
++	}
++
++	if ((state->committed & WLR_OUTPUT_STATE_BUFFER) &&
++			!present_buffer(output, state->buffer)) {
++		return false;
++	}
++
++	struct timespec now;
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	struct wlr_output_event_present present_event = {
++		.commit_seq = wlr_output->commit_seq + 1,
++		.presented = true,
++		.when = now,
++		.refresh = (int)backend->config.vsync_period,
++	};
++	output_defer_present(wlr_output, present_event);
++	wl_event_source_timer_update(output->frame_timer, output->frame_delay);
++	return true;
++}
++
++static void output_destroy(struct wlr_output *wlr_output) {
++	struct wlr_hwcomposer_output *output = hwcomposer_output_from_output(wlr_output);
++	wl_list_remove(&output->mode.link);
++	wlr_output_finish(wlr_output);
++	wl_event_source_remove(output->frame_timer);
++	output->backend->output = NULL;
++	free(output);
++}
++
++static const struct wlr_drm_format_set *output_get_primary_formats(
++		struct wlr_output *wlr_output, uint32_t buffer_caps) {
++	struct wlr_hwcomposer_output *output = hwcomposer_output_from_output(wlr_output);
++	return &output->backend->primary_formats;
++}
++
++static const struct wlr_output_impl output_impl = {
++	.destroy = output_destroy,
++	.test = output_test,
++	.commit = output_commit,
++	.get_primary_formats = output_get_primary_formats,
++};
++
++static int signal_frame(void *data) {
++	struct wlr_hwcomposer_output *output = data;
++	wlr_output_send_frame(&output->wlr_output);
++	return 0;
++}
++
++struct wlr_hwcomposer_output *hwcomposer_output_create(
++		struct wlr_hwcomposer_backend *backend) {
++	struct hwc2_display_config *config = &backend->config;
++	struct wlr_hwcomposer_output *output = calloc(1, sizeof(*output));
++	if (output == NULL) {
++		wlr_log(WLR_ERROR, "Failed to allocate wlr_hwcomposer_output");
++		return NULL;
++	}
++	output->backend = backend;
++
++	int64_t period = config->vsync_period > 0 ? config->vsync_period : 16666667;
++	int32_t refresh_mhz = (int32_t)(1000000000000LL / period);
++	output->frame_delay = (int)(period / 1000000);
++
++	// A real (preferred) mode rather than a custom one: compositors like phoc
++	// derive the output scale from it
++	output->mode = (struct wlr_output_mode){
++		.width = config->width,
++		.height = config->height,
++		.refresh = refresh_mhz,
++		.preferred = true,
++	};
++
++	struct wlr_output *wlr_output = &output->wlr_output;
++	struct wlr_output_state state;
++	wlr_output_state_init(&state);
++	wlr_output_state_set_mode(&state, &output->mode);
++	wlr_output_init(wlr_output, &backend->backend, &output_impl, backend->event_loop, &state);
++	wlr_output_state_finish(&state);
++	wl_list_insert(&wlr_output->modes, &output->mode.link);
++
++	// HWC reports dots per inch (sometimes x1000); fall back to nothing if bogus
++	float dpi_x = config->dpi_x > 10000 ? config->dpi_x / 1000 : config->dpi_x;
++	float dpi_y = config->dpi_y > 10000 ? config->dpi_y / 1000 : config->dpi_y;
++	if (dpi_x > 50 && dpi_y > 50) {
++		wlr_output->phys_width = (int)(config->width * 25.4f / dpi_x);
++		wlr_output->phys_height = (int)(config->height * 25.4f / dpi_y);
++	}
++
++	/* A built-in panel name: phoc only maps the touchscreen to (and rotates touch with)
++	 * outputs named LVDS-/eDP-/DSI-/DPI-; this is the same panel DRM calls DSI-1 */
++	wlr_output_set_name(wlr_output, "DSI-1");
++	wlr_output_set_description(wlr_output, "Android hwcomposer primary display");
++
++	output->frame_timer = wl_event_loop_add_timer(backend->event_loop, signal_frame, output);
++	return output;
++}
+diff --git a/backend/meson.build b/backend/meson.build
+index ed977d3..a53d32c 100644
+--- a/backend/meson.build
++++ b/backend/meson.build
+@@ -27,3 +27,4 @@ endforeach
+ subdir('multi')
+ subdir('wayland')
+ subdir('headless')
++subdir('hwcomposer')
+diff --git a/include/backend/hwcomposer.h b/include/backend/hwcomposer.h
+new file mode 100644
+index 0000000..37dc708
+--- /dev/null
++++ b/include/backend/hwcomposer.h
+@@ -0,0 +1,110 @@
++#ifndef BACKEND_HWCOMPOSER_H
++#define BACKEND_HWCOMPOSER_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <wlr/backend/interface.h>
++#include <wlr/interfaces/wlr_output.h>
++#include <wlr/render/drm_format_set.h>
++
++/*
++ * Minimal declarations of libhybris' hwc2 compatibility layer
++ * (hybris/hwc2/hwc2_compatibility_layer.h). libhwc2 is dlopen()ed at runtime so
++ * wlroots doesn't link against libhybris and works normally without it.
++ */
++typedef uint64_t hwc2_display_t;
++typedef uint32_t hwc2_config_t;
++typedef int32_t hwc2_error_t;
++
++struct hwc2_event_listener;
++struct hwc2_event_listener {
++	void (*on_vsync_received)(struct hwc2_event_listener *self, int32_t seq,
++		hwc2_display_t display, int64_t timestamp);
++	void (*on_hotplug_received)(struct hwc2_event_listener *self, int32_t seq,
++		hwc2_display_t display, bool connected, bool primary);
++	void (*on_refresh_received)(struct hwc2_event_listener *self, int32_t seq,
++		hwc2_display_t display);
++};
++
++struct hwc2_display_config {
++	hwc2_config_t id;
++	hwc2_display_t display;
++	int32_t width;
++	int32_t height;
++	int64_t vsync_period;
++	float dpi_x;
++	float dpi_y;
++};
++
++enum {
++	HWC2_ERROR_NONE = 0,
++	HWC2_ERROR_HAS_CHANGES = 5,
++	HWC2_POWER_MODE_OFF = 0,
++	HWC2_POWER_MODE_ON = 2,
++	HWC2_COMPOSITION_CLIENT = 1,
++	HWC2_BLEND_MODE_NONE = 1,
++	HAL_DATASPACE_UNKNOWN = 0,
++};
++
++struct hwc2_api {
++	void *lib;
++	void *(*device_new)(bool use_vr);
++	void (*device_register_callback)(void *device, struct hwc2_event_listener *listener,
++		int seq);
++	void (*device_on_hotplug)(void *device, hwc2_display_t display, bool connected);
++	void *(*device_get_display_by_id)(void *device, hwc2_display_t id);
++	struct hwc2_display_config *(*display_get_active_config)(void *display);
++	hwc2_error_t (*display_accept_changes)(void *display);
++	void *(*display_create_layer)(void *display);
++	hwc2_error_t (*display_get_release_fences)(void *display, void **fences);
++	hwc2_error_t (*display_present)(void *display, int32_t *present_fence);
++	hwc2_error_t (*display_set_client_target)(void *display, uint32_t slot,
++		void *buffer, int32_t acquire_fence, int32_t dataspace);
++	hwc2_error_t (*display_set_power_mode)(void *display, int mode);
++	hwc2_error_t (*display_validate)(void *display, uint32_t *num_types,
++		uint32_t *num_requests);
++	hwc2_error_t (*layer_set_blend_mode)(void *layer, int mode);
++	hwc2_error_t (*layer_set_composition_type)(void *layer, int type);
++	hwc2_error_t (*layer_set_display_frame)(void *layer, int32_t left, int32_t top,
++		int32_t right, int32_t bottom);
++	hwc2_error_t (*layer_set_source_crop)(void *layer, float left, float top,
++		float right, float bottom);
++	hwc2_error_t (*layer_set_visible_region)(void *layer, int32_t left, int32_t top,
++		int32_t right, int32_t bottom);
++	void (*out_fences_destroy)(void *fences);
++};
++
++struct wlr_hwcomposer_backend {
++	struct wlr_backend backend;
++	struct wl_event_loop *event_loop;
++	struct wl_listener event_loop_destroy;
++	bool started;
++
++	struct hwc2_api hwc2;
++	struct hwc2_event_listener listener;
++	void *device;
++	void *display;
++	void *layer;
++	struct hwc2_display_config config;
++
++	struct wlr_drm_format_set primary_formats;
++	struct wlr_hwcomposer_output *output;
++};
++
++struct wlr_hwcomposer_output {
++	struct wlr_output wlr_output;
++	struct wlr_hwcomposer_backend *backend;
++	struct wlr_output_mode mode; // the panel's only mode, marked preferred
++	struct wl_event_source *frame_timer;
++	int frame_delay; // ms
++};
++
++struct wlr_hwcomposer_backend *hwcomposer_backend_from_backend(
++	struct wlr_backend *wlr_backend);
++struct wlr_hwcomposer_output *hwcomposer_output_create(
++	struct wlr_hwcomposer_backend *backend);
++
++/* true for the hwcomposer backend itself or a multi backend containing it */
++bool wlr_backend_has_hwcomposer(struct wlr_backend *backend);
++
++#endif
+diff --git a/include/render/egl.h b/include/render/egl.h
+index 103ab57..32fe457 100644
+--- a/include/render/egl.h
++++ b/include/render/egl.h
+@@ -8,6 +8,8 @@ struct wlr_egl {
+ 	EGLContext context;
+ 	EGLDeviceEXT device; // may be EGL_NO_DEVICE_EXT
+ 	struct gbm_device *gbm_device;
++	// libhybris (Android) EGL: buffers come in as native buffers, not dma-bufs
++	bool hybris;
+ 
+ 	struct {
+ 		// Display extensions
+diff --git a/include/render/hybris.h b/include/render/hybris.h
+new file mode 100644
+index 0000000..b25a21a
+--- /dev/null
++++ b/include/render/hybris.h
+@@ -0,0 +1,38 @@
++#ifndef RENDER_HYBRIS_H
++#define RENDER_HYBRIS_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <wlr/render/allocator.h>
++#include <wlr/types/wlr_buffer.h>
++
++/*
++ * Android gralloc buffers through libhybris (EGL_HYBRIS_native_buffer2), for the
++ * hwcomposer backend. The EGL entry points are looked up at runtime, so this only
++ * works when the process runs on libhybris' libEGL.
++ */
++
++struct wlr_egl;
++
++struct wlr_allocator *wlr_hybris_allocator_create(void);
++
++bool wlr_buffer_is_hybris(struct wlr_buffer *buffer);
++
++/* The buffer's ANativeWindowBuffer: an EGLClientBuffer for EGL_NATIVE_BUFFER_ANDROID
++ * images and the client target handed to hwcomposer. */
++void *wlr_hybris_buffer_get_native(struct wlr_buffer *buffer);
++
++/* Stable per-buffer hwcomposer client target slot. */
++uint32_t wlr_hybris_buffer_get_slot(struct wlr_buffer *buffer);
++
++/* Client buffers of apps rendering with libhybris' EGL (android_wlegl). */
++bool wlr_buffer_is_hybris_wl(struct wlr_buffer *buffer);
++struct wl_resource *wlr_hybris_wl_buffer_get_resource(struct wlr_buffer *buffer);
++/* eglBindWaylandDisplayWL + register the buffer type; display is an EGLDisplay */
++struct wl_display;
++bool wlr_hybris_wl_display_init(void *display, struct wl_display *wl_display);
++
++/* EGL on libhybris' default display (no GBM/device platform, no dma-buf import). */
++struct wlr_egl *wlr_egl_create_hybris(void);
++
++#endif
+diff --git a/include/wlr/backend/hwcomposer.h b/include/wlr/backend/hwcomposer.h
+new file mode 100644
+index 0000000..f3d6b77
+--- /dev/null
++++ b/include/wlr/backend/hwcomposer.h
+@@ -0,0 +1,26 @@
++/*
++ * This an unstable interface of wlroots. No guarantees are made regarding the
++ * future consistency of this API.
++ */
++#ifndef WLR_USE_UNSTABLE
++#error "Add -DWLR_USE_UNSTABLE to enable unstable wlroots features"
++#endif
++
++#ifndef WLR_BACKEND_HWCOMPOSER_H
++#define WLR_BACKEND_HWCOMPOSER_H
++
++#include <wayland-server-core.h>
++#include <wlr/backend.h>
++#include <wlr/types/wlr_output.h>
++
++/**
++ * Creates an Android hwcomposer (HWC2 via libhybris) backend. The process must
++ * run on libhybris' libEGL and the composer HAL must be up. Select it with
++ * WLR_BACKENDS=hwcomposer[,libinput].
++ */
++struct wlr_backend *wlr_hwcomposer_backend_create(struct wl_event_loop *loop);
++
++bool wlr_backend_is_hwcomposer(struct wlr_backend *backend);
++bool wlr_output_is_hwcomposer(struct wlr_output *output);
++
++#endif
+diff --git a/meson.build b/meson.build
+index 41ce1ea..fcb058b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -82,6 +82,7 @@ internal_features = {
+ 	'xcb-errors': false,
+ 	'egl': false,
+ 	'libliftoff': false,
++	'hwcomposer': false,
+ }
+ internal_config = configuration_data()
+ 
+diff --git a/meson.options b/meson.options
+index 5863764..3734337 100644
+--- a/meson.options
++++ b/meson.options
+@@ -9,3 +9,4 @@ option('allocators', type: 'array', choices: ['auto', 'gbm', 'udmabuf'], value:
+ option('session', type: 'feature', value: 'auto', description: 'Enable session support')
+ option('color-management', type: 'feature', value: 'auto', description: 'Enable support for color management')
+ option('libliftoff', type: 'feature', value: 'auto', description: 'Enable support for libliftoff')
++option('hwcomposer', type: 'feature', value: 'disabled', description: 'Android hwcomposer backend + gralloc allocator through libhybris (loaded at runtime)')
+diff --git a/render/allocator/allocator.c b/render/allocator/allocator.c
+index b7dbf3d..353bc5e 100644
+--- a/render/allocator/allocator.c
++++ b/render/allocator/allocator.c
+@@ -12,6 +12,9 @@
+ #include "render/allocator/drm_dumb.h"
+ #include "render/allocator/shm.h"
+ #include "render/wlr_renderer.h"
++#include "config.h"
++#include "backend/hwcomposer.h"
++#include "render/hybris.h"
+ 
+ #if WLR_HAS_GBM_ALLOCATOR
+ #include "render/allocator/gbm.h"
+@@ -108,6 +111,12 @@ struct wlr_allocator *wlr_allocator_autocreate(struct wlr_backend *backend,
+ 
+ 	struct wlr_allocator *alloc = NULL;
+ 
++#if HAVE_HWCOMPOSER
++	if (wlr_backend_has_hwcomposer(backend)) {
++		return wlr_hybris_allocator_create();
++	}
++#endif
++
+ 	uint32_t gbm_caps = WLR_BUFFER_CAP_DMABUF;
+ 	if ((backend_caps & gbm_caps) && (renderer_caps & gbm_caps)
+ 			&& drm_fd >= 0) {
+diff --git a/render/allocator/hybris.c b/render/allocator/hybris.c
+new file mode 100644
+index 0000000..3be12ca
+--- /dev/null
++++ b/render/allocator/hybris.c
+@@ -0,0 +1,218 @@
++#include <assert.h>
++#include <drm_fourcc.h>
++#include <EGL/egl.h>
++#include <inttypes.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <wlr/interfaces/wlr_buffer.h>
++#include <wlr/render/allocator.h>
++#include <wlr/render/drm_format_set.h>
++#include <wlr/util/log.h>
++#include "render/hybris.h"
++
++/*
++ * gralloc buffers allocated through libhybris (eglHybrisCreateNativeBuffer). They're
++ * rendered into via EGL_NATIVE_BUFFER_ANDROID images (render/gles2) and scanned out
++ * as hwcomposer client targets (backend/hwcomposer).
++ */
++
++/* Mirrors of the Android structs we read; layout from nativebase.h / native_handle.h. */
++struct hybris_native_handle {
++	int version;
++	int num_fds;
++	int num_ints;
++	int data[];
++};
++
++struct hybris_native_buffer {
++	struct {
++		int magic;
++		int version;
++		void *reserved[4];
++		void (*inc_ref)(void *base);
++		void (*dec_ref)(void *base);
++	} common;
++	int width;
++	int height;
++	int stride;		/* in pixels */
++	int format;
++	int usage_deprecated;
++	uintptr_t layer_count;
++	void *reserved[1];
++	const struct hybris_native_handle *handle;
++	uint64_t usage;
++};
++
++#define HAL_PIXEL_FORMAT_RGBA_8888 1
++#define HAL_PIXEL_FORMAT_RGBX_8888 2
++#define GRALLOC_USAGE_HW_TEXTURE 0x100
++#define GRALLOC_USAGE_HW_RENDER 0x200
++#define GRALLOC_USAGE_HW_COMPOSER 0x800
++
++typedef EGLBoolean (*create_native_buffer_func)(EGLint width, EGLint height, EGLint usage,
++	EGLint format, EGLint *stride, EGLClientBuffer *buffer);
++typedef EGLBoolean (*release_native_buffer_func)(EGLClientBuffer buffer);
++
++struct hybris_allocator {
++	struct wlr_allocator base;
++	create_native_buffer_func create_native_buffer;
++	release_native_buffer_func release_native_buffer;
++	uint32_t next_slot;
++};
++
++struct hybris_buffer {
++	struct wlr_buffer base;
++	struct hybris_native_buffer *native;
++	release_native_buffer_func release_native_buffer;
++	uint32_t drm_format;
++	uint32_t slot;
++};
++
++static const struct wlr_buffer_impl buffer_impl;
++
++bool wlr_buffer_is_hybris(struct wlr_buffer *wlr_buffer) {
++	return wlr_buffer->impl == &buffer_impl;
++}
++
++static struct hybris_buffer *hybris_buffer_from_buffer(struct wlr_buffer *wlr_buffer) {
++	assert(wlr_buffer_is_hybris(wlr_buffer));
++	struct hybris_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
++	return buffer;
++}
++
++void *wlr_hybris_buffer_get_native(struct wlr_buffer *wlr_buffer) {
++	return hybris_buffer_from_buffer(wlr_buffer)->native;
++}
++
++uint32_t wlr_hybris_buffer_get_slot(struct wlr_buffer *wlr_buffer) {
++	return hybris_buffer_from_buffer(wlr_buffer)->slot;
++}
++
++static void buffer_destroy(struct wlr_buffer *wlr_buffer) {
++	struct hybris_buffer *buffer = hybris_buffer_from_buffer(wlr_buffer);
++	buffer->release_native_buffer(buffer->native);
++	free(buffer);
++}
++
++/* gralloc buffers are dma-bufs underneath (first fd of the native handle) */
++static bool buffer_get_dmabuf(struct wlr_buffer *wlr_buffer,
++		struct wlr_dmabuf_attributes *attribs) {
++	struct hybris_buffer *buffer = hybris_buffer_from_buffer(wlr_buffer);
++	const struct hybris_native_handle *handle = buffer->native->handle;
++	if (handle == NULL || handle->num_fds < 1) {
++		return false;
++	}
++	*attribs = (struct wlr_dmabuf_attributes){
++		.width = wlr_buffer->width,
++		.height = wlr_buffer->height,
++		.format = buffer->drm_format,
++		.modifier = DRM_FORMAT_MOD_INVALID,
++		.n_planes = 1,
++		.offset = { 0 },
++		.stride = { (uint32_t)buffer->native->stride * 4 },
++		.fd = { handle->data[0] },
++	};
++	return true;
++}
++
++static const struct wlr_buffer_impl buffer_impl = {
++	.destroy = buffer_destroy,
++	.get_dmabuf = buffer_get_dmabuf,
++};
++
++static int hal_format_from_drm(uint32_t fmt) {
++	switch (fmt) {
++	// Everything is allocated as RGBA/RGBX: the composer reads BGRA client
++	// targets with red and blue swapped on this MTK HWC, and for a render target
++	// GL takes care of the channel order anyway. (Only CPU readback of an
++	// XRGB/ARGB buffer, e.g. screencopy, would see swapped channels.)
++	case DRM_FORMAT_ABGR8888:
++	case DRM_FORMAT_ARGB8888:
++		return HAL_PIXEL_FORMAT_RGBA_8888;
++	case DRM_FORMAT_XBGR8888:
++	case DRM_FORMAT_XRGB8888:
++		return HAL_PIXEL_FORMAT_RGBX_8888;
++	default:
++		return -1;
++	}
++}
++
++static struct hybris_allocator *hybris_allocator_from_allocator(
++		struct wlr_allocator *wlr_alloc);
++
++static struct wlr_buffer *allocator_create_buffer(struct wlr_allocator *wlr_alloc,
++		int width, int height, const struct wlr_drm_format *format) {
++	struct hybris_allocator *alloc = hybris_allocator_from_allocator(wlr_alloc);
++
++	int hal_format = hal_format_from_drm(format->format);
++	if (hal_format < 0) {
++		wlr_log(WLR_ERROR, "hybris allocator: unsupported format 0x%08"PRIX32,
++			format->format);
++		return NULL;
++	}
++
++	struct hybris_buffer *buffer = calloc(1, sizeof(*buffer));
++	if (buffer == NULL) {
++		return NULL;
++	}
++
++	EGLint stride;
++	EGLClientBuffer native;
++	if (!alloc->create_native_buffer(width, height,
++			GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_HW_RENDER | GRALLOC_USAGE_HW_COMPOSER,
++			hal_format, &stride, &native)) {
++		wlr_log(WLR_ERROR, "hybris allocator: gralloc allocation of %dx%d failed",
++			width, height);
++		free(buffer);
++		return NULL;
++	}
++
++	wlr_buffer_init(&buffer->base, &buffer_impl, width, height);
++	buffer->native = native;
++	buffer->release_native_buffer = alloc->release_native_buffer;
++	buffer->drm_format = format->format;
++	buffer->slot = alloc->next_slot++ % 64;
++
++	wlr_log(WLR_DEBUG, "Allocated %dx%d gralloc buffer (stride %d, slot %"PRIu32")",
++		width, height, stride, buffer->slot);
++	return &buffer->base;
++}
++
++static void allocator_destroy(struct wlr_allocator *wlr_alloc) {
++	free(hybris_allocator_from_allocator(wlr_alloc));
++}
++
++static const struct wlr_allocator_interface allocator_impl = {
++	.create_buffer = allocator_create_buffer,
++	.destroy = allocator_destroy,
++};
++
++static struct hybris_allocator *hybris_allocator_from_allocator(
++		struct wlr_allocator *wlr_alloc) {
++	assert(wlr_alloc->impl == &allocator_impl);
++	struct hybris_allocator *alloc = wl_container_of(wlr_alloc, alloc, base);
++	return alloc;
++}
++
++struct wlr_allocator *wlr_hybris_allocator_create(void) {
++	create_native_buffer_func create =
++		(create_native_buffer_func)eglGetProcAddress("eglHybrisCreateNativeBuffer");
++	release_native_buffer_func release =
++		(release_native_buffer_func)eglGetProcAddress("eglHybrisReleaseNativeBuffer");
++	if (create == NULL || release == NULL) {
++		wlr_log(WLR_ERROR, "hybris allocator: EGL_HYBRIS_native_buffer2 not available "
++			"(not running on libhybris' libEGL?)");
++		return NULL;
++	}
++
++	struct hybris_allocator *alloc = calloc(1, sizeof(*alloc));
++	if (alloc == NULL) {
++		return NULL;
++	}
++	wlr_allocator_init(&alloc->base, &allocator_impl, WLR_BUFFER_CAP_DMABUF);
++	alloc->create_native_buffer = create;
++	alloc->release_native_buffer = release;
++
++	wlr_log(WLR_INFO, "Created hybris (gralloc) allocator");
++	return &alloc->base;
++}
+diff --git a/render/egl.c b/render/egl.c
+index 8673aca..5947467 100644
+--- a/render/egl.c
++++ b/render/egl.c
+@@ -9,7 +9,9 @@
+ #include <wlr/util/log.h>
+ #include <wlr/util/region.h>
+ #include <xf86drm.h>
++#include "config.h"
+ #include "render/egl.h"
++#include "render/hybris.h"
+ #include "util/env.h"
+ 
+ static enum wlr_log_importance egl_log_importance_to_wlr(EGLint type) {
+@@ -614,6 +616,58 @@ error:
+ 	return NULL;
+ }
+ 
++#if HAVE_HWCOMPOSER
++struct wlr_egl *wlr_egl_create_hybris(void) {
++	// libhybris' libEGL has no client extensions (no platform_base, gbm or
++	// device platforms): use the default display, which is the Android driver.
++	struct wlr_egl *egl = calloc(1, sizeof(*egl));
++	if (egl == NULL) {
++		wlr_log_errno(WLR_ERROR, "Allocation failed");
++		return NULL;
++	}
++	if (eglBindAPI(EGL_OPENGL_ES_API) == EGL_FALSE) {
++		wlr_log(WLR_ERROR, "Failed to bind to the OpenGL ES API");
++		goto error;
++	}
++	EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
++	if (display == EGL_NO_DISPLAY || !egl_init_display(egl, display, true)) {
++		wlr_log(WLR_ERROR, "Failed to initialize the libhybris EGL display");
++		goto error;
++	}
++
++	// No dma-buf import here, so nothing filled the render formats: advertise
++	// what the hybris allocator makes (gralloc RGBA/RGBX) so outputs can pick a
++	// swapchain format. gles2 renders into them via EGL_NATIVE_BUFFER_ANDROID.
++	// XRGB/ARGB first: wlroots prefers them for primary buffers (HAL BGRA_8888)
++	wlr_drm_format_set_add(&egl->dmabuf_render_formats, DRM_FORMAT_XRGB8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&egl->dmabuf_render_formats, DRM_FORMAT_ARGB8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&egl->dmabuf_render_formats, DRM_FORMAT_XBGR8888,
++		DRM_FORMAT_MOD_INVALID);
++	wlr_drm_format_set_add(&egl->dmabuf_render_formats, DRM_FORMAT_ABGR8888,
++		DRM_FORMAT_MOD_INVALID);
++
++	static const EGLint attribs[] = {
++		EGL_CONTEXT_CLIENT_VERSION, 2,
++		EGL_NONE,
++	};
++	egl->context = eglCreateContext(egl->display, EGL_NO_CONFIG_KHR,
++		EGL_NO_CONTEXT, attribs);
++	if (egl->context == EGL_NO_CONTEXT) {
++		wlr_log(WLR_ERROR, "Failed to create EGL context");
++		goto error;
++	}
++	egl->hybris = true;
++	wlr_log(WLR_INFO, "Created libhybris EGL context");
++	return egl;
++
++error:
++	free(egl);
++	return NULL;
++}
++#endif
++
+ struct wlr_egl *wlr_egl_create_with_context(EGLDisplay display,
+ 		EGLContext context) {
+ 	EGLint client_type;
+diff --git a/render/gles2/pass.c b/render/gles2/pass.c
+index a70ea13..6a677d2 100644
+--- a/render/gles2/pass.c
++++ b/render/gles2/pass.c
+@@ -5,7 +5,9 @@
+ #include <unistd.h>
+ #include <wlr/render/drm_syncobj.h>
+ #include <wlr/util/transform.h>
++#include "config.h"
+ #include "render/egl.h"
++#include "render/hybris.h"
+ #include "render/gles2.h"
+ #include "util/matrix.h"
+ 
+@@ -57,6 +59,13 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
+ 			goto out;
+ 		}
+ 	} else {
++#if HAVE_HWCOMPOSER
++		// hwcomposer gets the client target without an acquire fence, so the
++		// frame must be complete before the backend commits it
++		if (wlr_buffer_is_hybris(pass->buffer->buffer)) {
++			glFinish();
++		} else
++#endif
+ 		glFlush();
+ 	}
+ 
+diff --git a/render/gles2/renderer.c b/render/gles2/renderer.c
+index e362dae..393f036 100644
+--- a/render/gles2/renderer.c
++++ b/render/gles2/renderer.c
+@@ -15,7 +15,16 @@
+ #include <wlr/util/box.h>
+ #include <wlr/util/log.h>
+ #include <xf86drm.h>
++#include "config.h"
+ #include "render/egl.h"
++#include "render/hybris.h"
++
++#ifndef EGL_NATIVE_BUFFER_ANDROID
++#define EGL_NATIVE_BUFFER_ANDROID 0x3140
++#endif
++#ifndef EGL_WAYLAND_BUFFER_WL
++#define EGL_WAYLAND_BUFFER_WL 0x31D5
++#endif
+ #include "render/gles2.h"
+ #include "render/pixel_format.h"
+ #include "util/time.h"
+@@ -138,15 +147,45 @@ struct wlr_gles2_buffer *gles2_buffer_get_or_create(struct wlr_gles2_renderer *r
+ 	buffer->buffer = wlr_buffer;
+ 	buffer->renderer = renderer;
+ 
+-	struct wlr_dmabuf_attributes dmabuf = {0};
+-	if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
+-		goto error_buffer;
+-	}
++#if HAVE_HWCOMPOSER
++	if (wlr_buffer_is_hybris(wlr_buffer)) {
++		// gralloc buffer from the hybris allocator: Android EGL drivers (Mali)
++		// import those as native buffers, not as dma-bufs
++		static const EGLint image_attribs[] = {
++			EGL_IMAGE_PRESERVED_KHR, EGL_TRUE,
++			EGL_NONE,
++		};
++		buffer->image = renderer->egl->procs.eglCreateImageKHR(renderer->egl->display,
++			EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
++			(EGLClientBuffer)wlr_hybris_buffer_get_native(wlr_buffer), image_attribs);
++		buffer->external_only = false;
++		if (buffer->image == EGL_NO_IMAGE_KHR) {
++			wlr_log(WLR_ERROR, "eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) failed");
++			goto error_buffer;
++		}
++	} else if (wlr_buffer_is_hybris_wl(wlr_buffer)) {
++		// android_wlegl client buffer: libhybris maps it to its native buffer
++		buffer->image = renderer->egl->procs.eglCreateImageKHR(renderer->egl->display,
++			EGL_NO_CONTEXT, EGL_WAYLAND_BUFFER_WL,
++			(EGLClientBuffer)wlr_hybris_wl_buffer_get_resource(wlr_buffer), NULL);
++		buffer->external_only = true;
++		if (buffer->image == EGL_NO_IMAGE_KHR) {
++			wlr_log(WLR_ERROR, "eglCreateImageKHR(EGL_WAYLAND_BUFFER_WL) failed");
++			goto error_buffer;
++		}
++	} else
++#endif
++	{
++		struct wlr_dmabuf_attributes dmabuf = {0};
++		if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
++			goto error_buffer;
++		}
+ 
+-	buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
+-		&dmabuf, &buffer->external_only);
+-	if (buffer->image == EGL_NO_IMAGE_KHR) {
+-		goto error_buffer;
++		buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
++			&dmabuf, &buffer->external_only);
++		if (buffer->image == EGL_NO_IMAGE_KHR) {
++			goto error_buffer;
++		}
+ 	}
+ 
+ 	wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
+@@ -541,7 +580,8 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
+ 	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
+ 	wlr_log(WLR_INFO, "Supported GLES2 extensions: %s", exts_str);
+ 
+-	if (!renderer->egl->exts.EXT_image_dma_buf_import) {
++	// libhybris renders into gralloc native buffers instead (see gles2_buffer_get_or_create)
++	if (!renderer->egl->exts.EXT_image_dma_buf_import && !renderer->egl->hybris) {
+ 		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
+ 		free(renderer);
+ 		return NULL;
+diff --git a/render/gles2/texture.c b/render/gles2/texture.c
+index 9a967eb..752aa72 100644
+--- a/render/gles2/texture.c
++++ b/render/gles2/texture.c
+@@ -11,7 +11,9 @@
+ #include <wlr/render/wlr_texture.h>
+ #include <wlr/util/log.h>
+ #include "render/egl.h"
++#include "config.h"
+ #include "render/gles2.h"
++#include "render/hybris.h"
+ #include "render/pixel_format.h"
+ 
+ static const struct wlr_texture_impl texture_impl;
+@@ -416,6 +418,18 @@ struct wlr_texture *gles2_texture_from_buffer(struct wlr_renderer *wlr_renderer,
+ 	uint32_t format;
+ 	size_t stride;
+ 	struct wlr_dmabuf_attributes dmabuf;
++#if HAVE_HWCOMPOSER
++	if (wlr_buffer_is_hybris_wl(buffer)) {
++		// android_wlegl client buffer: same EGLImage path as a dma-buf
++		// (gles2_buffer_get_or_create imports it); only size/alpha are used
++		struct wlr_dmabuf_attributes attribs = {
++			.width = buffer->width,
++			.height = buffer->height,
++			.format = DRM_FORMAT_ABGR8888,
++		};
++		return gles2_texture_from_dmabuf(renderer, buffer, &attribs);
++	}
++#endif
+ 	if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
+ 		return gles2_texture_from_dmabuf(renderer, buffer, &dmabuf);
+ 	} else if (wlr_buffer_begin_data_ptr_access(buffer,
+diff --git a/render/hybris_wl_buffer.c b/render/hybris_wl_buffer.c
+new file mode 100644
+index 0000000..75be22f
+--- /dev/null
++++ b/render/hybris_wl_buffer.c
+@@ -0,0 +1,137 @@
++#include <assert.h>
++#include <EGL/egl.h>
++#include <stdlib.h>
++#include <wayland-server-core.h>
++#include <wayland-server-protocol.h>
++#include <wlr/interfaces/wlr_buffer.h>
++#include <wlr/util/log.h>
++#include "render/hybris.h"
++
++/*
++ * Client buffers of GPU-rendering apps on libhybris' EGL. Their wayland platform
++ * shares gralloc buffers through the android_wlegl protocol, which libhybris
++ * serves itself once the compositor calls eglBindWaylandDisplayWL (the old Mesa
++ * wl_drm model). Here those wl_buffers become wlr_buffers; the gles2 renderer
++ * turns them into textures with eglCreateImageKHR(EGL_WAYLAND_BUFFER_WL).
++ */
++
++#ifndef EGL_WAYLAND_BUFFER_WL
++#define EGL_WAYLAND_BUFFER_WL 0x31D5
++#endif
++
++typedef EGLBoolean (*bind_wayland_display_func)(EGLDisplay dpy, struct wl_display *display);
++typedef EGLBoolean (*query_wayland_buffer_func)(EGLDisplay dpy, struct wl_resource *buffer,
++	EGLint attribute, EGLint *value);
++
++static EGLDisplay hybris_display = EGL_NO_DISPLAY;
++static query_wayland_buffer_func query_wayland_buffer;
++
++struct hybris_wl_buffer {
++	struct wlr_buffer base;
++	struct wl_resource *resource;
++	struct wl_listener resource_destroy;
++	struct wl_listener release;
++};
++
++static const struct wlr_buffer_impl buffer_impl;
++
++bool wlr_buffer_is_hybris_wl(struct wlr_buffer *wlr_buffer) {
++	return wlr_buffer->impl == &buffer_impl;
++}
++
++static struct hybris_wl_buffer *hybris_wl_buffer_from_buffer(struct wlr_buffer *wlr_buffer) {
++	assert(wlr_buffer_is_hybris_wl(wlr_buffer));
++	struct hybris_wl_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
++	return buffer;
++}
++
++struct wl_resource *wlr_hybris_wl_buffer_get_resource(struct wlr_buffer *wlr_buffer) {
++	return hybris_wl_buffer_from_buffer(wlr_buffer)->resource;
++}
++
++static void buffer_destroy(struct wlr_buffer *wlr_buffer) {
++	struct hybris_wl_buffer *buffer = hybris_wl_buffer_from_buffer(wlr_buffer);
++	wl_list_remove(&buffer->release.link);
++	if (buffer->resource != NULL) {
++		wl_list_remove(&buffer->resource_destroy.link);
++	}
++	wlr_buffer_finish(wlr_buffer);
++	free(buffer);
++}
++
++static const struct wlr_buffer_impl buffer_impl = {
++	.destroy = buffer_destroy,
++};
++
++static void handle_resource_destroy(struct wl_listener *listener, void *data) {
++	struct hybris_wl_buffer *buffer = wl_container_of(listener, buffer, resource_destroy);
++	wl_list_remove(&buffer->resource_destroy.link);
++	buffer->resource = NULL;
++	wlr_buffer_drop(&buffer->base);
++}
++
++static void handle_release(struct wl_listener *listener, void *data) {
++	struct hybris_wl_buffer *buffer = wl_container_of(listener, buffer, release);
++	if (buffer->resource != NULL) {
++		wl_buffer_send_release(buffer->resource);
++	}
++}
++
++static bool resource_is_instance(struct wl_resource *resource) {
++	EGLint format;
++	return query_wayland_buffer != NULL &&
++		query_wayland_buffer(hybris_display, resource, EGL_TEXTURE_FORMAT, &format);
++}
++
++static struct wlr_buffer *buffer_from_resource(struct wl_resource *resource) {
++	// The resource's user data belongs to libhybris, so find ours via the
++	// destroy listener
++	struct wl_listener *listener =
++		wl_resource_get_destroy_listener(resource, handle_resource_destroy);
++	if (listener != NULL) {
++		struct hybris_wl_buffer *buffer =
++			wl_container_of(listener, buffer, resource_destroy);
++		return &buffer->base;	// the caller locks
++	}
++
++	EGLint width, height;
++	if (!query_wayland_buffer(hybris_display, resource, EGL_WIDTH, &width) ||
++			!query_wayland_buffer(hybris_display, resource, EGL_HEIGHT, &height)) {
++		return NULL;
++	}
++
++	struct hybris_wl_buffer *buffer = calloc(1, sizeof(*buffer));
++	if (buffer == NULL) {
++		return NULL;
++	}
++	wlr_buffer_init(&buffer->base, &buffer_impl, width, height);
++	buffer->resource = resource;
++	buffer->resource_destroy.notify = handle_resource_destroy;
++	wl_resource_add_destroy_listener(resource, &buffer->resource_destroy);
++	buffer->release.notify = handle_release;
++	wl_signal_add(&buffer->base.events.release, &buffer->release);
++	return &buffer->base;
++}
++
++static const struct wlr_buffer_resource_interface resource_interface = {
++	.name = "hybris_wl_buffer",
++	.is_instance = resource_is_instance,
++	.from_resource = buffer_from_resource,
++};
++
++bool wlr_hybris_wl_display_init(void *display, struct wl_display *wl_display) {
++	bind_wayland_display_func bind =
++		(bind_wayland_display_func)eglGetProcAddress("eglBindWaylandDisplayWL");
++	query_wayland_buffer_func query =
++		(query_wayland_buffer_func)eglGetProcAddress("eglQueryWaylandBufferWL");
++	if (bind == NULL || query == NULL || !bind(display, wl_display)) {
++		wlr_log(WLR_ERROR, "libhybris EGL_WL_bind_wayland_display unavailable: "
++			"clients can't share GPU buffers (they'll use shm)");
++		return false;
++	}
++	hybris_display = display;
++	query_wayland_buffer = query;
++	wlr_buffer_register_resource_interface(&resource_interface);
++	wlr_log(WLR_INFO, "android_wlegl (libhybris) bound: GPU-rendered client buffers enabled");
++	return true;
++}
+diff --git a/render/wlr_renderer.c b/render/wlr_renderer.c
+index e65314c..c0997c7 100644
+--- a/render/wlr_renderer.c
++++ b/render/wlr_renderer.c
+@@ -25,6 +25,10 @@
+ #include <wlr/render/vulkan.h>
+ #endif // WLR_HAS_VULKAN_RENDERER
+ 
++#include "config.h"
++#include "backend/hwcomposer.h"
++#include "render/egl.h"
++#include "render/hybris.h"
+ #include "render/wlr_renderer.h"
+ #include "util/env.h"
+ 
+@@ -75,7 +79,21 @@ const struct wlr_drm_format_set *wlr_renderer_get_render_formats(
+ 
+ bool wlr_renderer_init_wl_shm(struct wlr_renderer *r,
+ 		struct wl_display *wl_display) {
+-	return wlr_shm_create_with_renderer(wl_display, 2, r) != NULL;
++	if (wlr_shm_create_with_renderer(wl_display, 2, r) == NULL) {
++		return false;
++	}
++#if HAVE_HWCOMPOSER
++	// GPU apps on libhybris share gralloc buffers via android_wlegl. Hooked here
++	// rather than in wlr_renderer_init_wl_display: compositors like phoc only
++	// call this one.
++	if (wlr_renderer_is_gles2(r)) {
++		struct wlr_egl *egl = wlr_gles2_renderer_get_egl(r);
++		if (egl->hybris) {
++			wlr_hybris_wl_display_init(egl->display, wl_display);
++		}
++	}
++#endif
++	return true;
+ }
+ 
+ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
+@@ -231,6 +249,24 @@ static struct wlr_renderer *renderer_autocreate(struct wlr_backend *backend, int
+ 
+ 	bool own_drm_fd = false;
+ 
++#if HAVE_HWCOMPOSER
++	// The hwcomposer backend has no DRM device: GLES on libhybris' EGL renders
++	// into gralloc buffers (render/allocator/hybris.c).
++	if (backend != NULL && wlr_backend_has_hwcomposer(backend)) {
++		struct wlr_egl *egl = wlr_egl_create_hybris();
++		if (egl != NULL) {
++			renderer = wlr_gles2_renderer_create(egl);
++			if (renderer == NULL) {
++				wlr_egl_destroy(egl);
++			}
++		}
++		if (renderer == NULL) {
++			wlr_log(WLR_ERROR, "Failed to create a GLES2 renderer on libhybris");
++		}
++		goto out;
++	}
++#endif
++
+ 	if ((is_auto && WLR_HAS_GLES2_RENDERER) || strcmp(renderer_name, "gles2") == 0) {
+ 		if (!open_preferred_drm_fd(backend, &drm_fd, &own_drm_fd)) {
+ 			log_creation_failure(is_auto, "Cannot create GLES2 renderer: no DRM FD available");

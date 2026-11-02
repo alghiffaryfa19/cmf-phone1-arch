@@ -1,0 +1,22 @@
+# USB NCM gadget (set up by the initramfs before switch_root): phone is 172.16.42.1,
+# the PC gets 172.16.42.2 via DHCP. ssh alarm@172.16.42.1
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+DHCPServer=yes
+IPMasquerade=no
+DNS=1.1.1.1
+DNS=9.9.9.9
+
+# Internet via the PC (sudo scripts/host-nat.sh on the PC), only as a last resort: without
+# a metric this route beats WLAN and mobile data even when the PC isn't forwarding
+[Route]
+Gateway=172.16.42.2
+Metric=2000
+
+[DHCPServer]
+PoolOffset=1
+PoolSize=1
+EmitDNS=no

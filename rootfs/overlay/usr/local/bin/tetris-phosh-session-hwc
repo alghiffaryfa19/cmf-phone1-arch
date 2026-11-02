@@ -1,0 +1,27 @@
+#!/bin/sh
+# phosh-session variant: phoc on the Android hwcomposer + Mali GPU (wlroots hwcomposer
+# backend, libhybris). Apps get libhybris' EGL too (EGL_PLATFORM=wayland): they render
+# on the GPU and hand gralloc buffers to phoc via android_wlegl. Set
+# TETRIS_APPS_SOFTWARE=1 (e.g. in /etc/tetris-android/gpu-shell) for Mesa/CPU apps.
+# Needs tetris-android.service with the composer HAL (tetris-android-start-hals --display).
+set -a
+. /etc/tetris-android/hybris.env
+set +a
+# only the GL/hwc2 libs (see tetris-android-prepare): libhybris' libvulkan crashes phoc
+export LD_LIBRARY_PATH=/opt/tetris-hybris-gl/lib
+export WLR_BACKENDS=hwcomposer,libinput
+unset WLR_RENDERER
+PHOC_INI=/usr/share/phosh/phoc.ini
+[ -f /etc/phosh/phoc.ini ] && PHOC_INI=/etc/phosh/phoc.ini
+. /etc/tetris-android/gpu-shell 2>/dev/null
+if [ -n "$TETRIS_APPS_SOFTWARE" ]; then
+    CHILD="env -u LD_LIBRARY_PATH -u HYBRIS_LD_LIBRARY_PATH -u WLR_BACKENDS gnome-session --session=phosh"
+else
+    # GTK4 would pick Vulkan (only lavapipe here, no GPU driver): force its GL renderer
+    CHILD="env -u WLR_BACKENDS EGL_PLATFORM=wayland GSK_RENDERER=gl GDK_DISABLE=vulkan gnome-session --session=phosh"
+fi
+# Use the user's systemd session bus like phosh-session does; a private
+# dbus-run-session bus has no org.freedesktop.systemd1 and gnome-session aborts.
+: "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus}"
+export DBUS_SESSION_BUS_ADDRESS
+exec systemd-cat -t phoc /usr/bin/phoc -v -S -C "$PHOC_INI" -E "$CHILD"

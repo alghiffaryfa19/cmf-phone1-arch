@@ -1,0 +1,10 @@
+[Unit]
+Description=Camera stack in the Halium container (camera HAL + droidmedia)
+Requires=tetris-android.service
+After=tetris-android.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/tetris-camera start
+ExecStop=/usr/local/bin/tetris-camera stop

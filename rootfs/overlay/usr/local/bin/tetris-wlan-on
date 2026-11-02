@@ -1,0 +1,14 @@
+#!/bin/sh
+# Power on the MTK connac2 WLAN once conninfra's pre-calibration has run.
+# The initramfs already handed the NVRAM to the driver; pre-cal starts on the first
+# display unblank (phoc), so retry "1" -> /dev/wmtWifi for a while. Then "S" selects
+# station mode (like Android's Wi-Fi HAL); without it wlan0 stays in HALT and refuses
+# to come up (ENODEV), so wpa_supplicant/NetworkManager can't use it.
+for i in $(seq 60); do
+    if echo 1 > /dev/wmtWifi 2>/dev/null; then
+        echo S > /dev/wmtWifi && exit 0
+    fi
+    sleep 3
+done
+echo "WLAN power on failed" >&2
+exit 1

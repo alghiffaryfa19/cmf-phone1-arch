@@ -1,0 +1,41 @@
+#!/bin/sh
+# ExecStartPre (as root) of tetris-phosh: pick GPU Phosh (wlroots hwcomposer backend,
+# Mali via libhybris) or software Phosh (DRM + pixman), written to /run/tetris-phosh/mode.
+#
+# GPU mode needs /etc/tetris-android/gpu-shell and a registered composer HAL. Crash
+# guard: a marker on flash is created for every GPU start and removed after 90 s of
+# uptime; if it's still there on the next start (phoc died, kernel crash, reset), this
+# start falls back to software so a broken GPU stack can't lock the phone out.
+M=/var/lib/tetris-android/gpu-attempt
+F=/run/tetris-phosh/force-sw
+mkdir -p /run/tetris-phosh /var/lib/tetris-android
+mode=sw
+if [ -e "$F" ]; then
+    # Sticky for this boot: a service restart must not flip back to GPU mode
+    :
+elif [ -e "$M" ]; then
+    echo "tetris-phosh-select: previous GPU session did not survive 90 s -> software Phosh"
+    rm -f "$M"; sync
+    touch "$F"
+elif [ -e /etc/tetris-android/gpu-shell ]; then
+    if lxc-attach -n android -- /system/bin/service check \
+            android.hardware.graphics.composer3.IComposer/default 2>/dev/null | grep -q found; then
+        mode=gpu
+        # A software session before (forced or crash fallback) stopped the composer
+        lxc-attach -n android -- /system/bin/setprop ctl.start vendor.hwcomposer-3-2 2>/dev/null
+        touch "$M"; sync
+        # A timer, not a background job: systemd kills what ExecStartPre leaves behind
+        systemctl stop tetris-gpu-stable.timer 2>/dev/null
+        systemd-run --quiet --unit=tetris-gpu-stable --on-active=90 \
+            /bin/sh -c "rm -f $M; sync"
+    else
+        echo "tetris-phosh-select: composer HAL not up -> software Phosh"
+    fi
+fi
+if [ "$mode" = sw ]; then
+    # The composer owns DRM and would make software phoc fail; it's only still
+    # running here after a GPU session died without a reboot
+    lxc-attach -n android -- /system/bin/setprop ctl.stop vendor.hwcomposer-3-2 2>/dev/null && sleep 1
+fi
+echo "$mode" > /run/tetris-phosh/mode
+echo "tetris-phosh-select: mode=$mode"

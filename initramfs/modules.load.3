@@ -1,0 +1,16 @@
+# Stage 3: modules stock Android loads from .rc files (not in vendor_boot/vendor_dlkm lists).
+# Touch: init.*.rc "modprobe -a tui-common.ko focaltech_tp.ko ft3683g.ko eph861.ko"
+tui-common.ko
+focaltech_tp.ko
+# memory
+zsmalloc.ko
+zram.ko
+# connectivity kernel side (firmware loading still needs Android's conninfra_loader)
+connfem.ko
+conninfra.ko
+wlan_page_pool.ko
+wmt_chrdev_wifi_connac2.ko
+wlan_drv_gen4m_6878.ko
+bt_drv_6878.ko
+gps_pwr.ko
+gps_scp.ko

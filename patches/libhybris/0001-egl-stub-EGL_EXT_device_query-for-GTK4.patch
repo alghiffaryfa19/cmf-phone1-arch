@@ -1,0 +1,48 @@
+diff --git a/hybris/egl/egl.c b/hybris/egl/egl.c
+index 0051d37..3986f8c 100644
+--- a/hybris/egl/egl.c
++++ b/hybris/egl/egl.c
+@@ -317,7 +317,7 @@ const char * eglQueryString(EGLDisplay dpy, EGLint name)
+ 		const char *ret = _eglQueryString(dpy, name);
+ 		static char eglextensionsbuf[2048];
+ 		snprintf(eglextensionsbuf, 2046, "%s %s", ret,
+-			"EGL_EXT_client_extensions EGL_EXT_platform_wayland EGL_KHR_platform_wayland"
++			"EGL_EXT_client_extensions EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_device_query"
+ 		);
+ 		ret = eglextensionsbuf;
+ 		return ret;
+@@ -614,10 +614,34 @@ static int compare_search(const void * key, const void * item)
+ 	return strcmp(key, f_item->name);
+ }
+ 
++/* EGL_EXT_device_query stubs: no EGL device information on libhybris. GTK 4.24
++ * calls eglQueryDisplayAttribEXT unconditionally; without a provider libepoxy aborts. */
++static EGLBoolean hybris_eglQueryDisplayAttribEXT(EGLDisplay dpy, EGLint attribute, EGLAttrib *value)
++{
++	return EGL_FALSE;
++}
++
++static EGLBoolean hybris_eglQueryDeviceAttribEXT(void *device, EGLint attribute, EGLAttrib *value)
++{
++	return EGL_FALSE;
++}
++
++static const char *hybris_eglQueryDeviceStringEXT(void *device, EGLint name)
++{
++	return NULL;
++}
++
+ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
+ {
+ 	HYBRIS_DLSYSM(egl, &_eglGetProcAddress, "eglGetProcAddress");
+ 
++	if (strcmp(procname, "eglQueryDisplayAttribEXT") == 0)
++		return (__eglMustCastToProperFunctionPointerType)hybris_eglQueryDisplayAttribEXT;
++	if (strcmp(procname, "eglQueryDeviceAttribEXT") == 0)
++		return (__eglMustCastToProperFunctionPointerType)hybris_eglQueryDeviceAttribEXT;
++	if (strcmp(procname, "eglQueryDeviceStringEXT") == 0)
++		return (__eglMustCastToProperFunctionPointerType)hybris_eglQueryDeviceStringEXT;
++
+ 	if (!_eglHybrisOverrideFunctions_sorted) {
+ 		_eglHybrisOverrideFunctions_sorted = EGL_TRUE;
+ 		qsort(

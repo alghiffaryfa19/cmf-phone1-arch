@@ -1,0 +1,20 @@
+# Vendor init rc files (from /vendor/etc/init) the Halium container may run.
+# Graphics buffer allocator (gralloc) - needed by the Mali EGL/GLES driver via libhybris
+android.hardware.graphics.allocator-V2-service-mediatek.rc
+# Display: AIDL composer3 HAL - for libhybris hwc2 (wlroots hwcomposer backend)
+android.hardware.graphics.composer@3.2-service.rc
+# MediaTek picture-quality service the composer HAL waits for (IPqDevice).
+# NOT vendor.mediatek.hardware.mmlpq@V1-service.rc: without access to /dev/mml_pq its
+# MMLPQCompConfig thread spins at RT priority -> RT throttling -> watchdog reboot.
+vendor.mediatek.hardware.pq_aidl-service.rc
+# Modem: ccci_mdinit boots the modem CPU and serves its file system, nvram_daemon
+# prepares NVRAM. Only started by tetris-android-start-modem (ctl.start).
+init.cccimdinit.rc
+init.cccirpcd.rc
+nvram_daemon.rc
+# Camera: MediaTek camera HAL (AIDL camera provider); used by droidmedia's minimediaservice
+camerahalserver.rc
+# MediaTek power HAL: for the camera HAL, started at boot by tetris-android-start-hals
+vendor.mediatek.hardware.mtkpower@1.0-service.rc
+# Codec2 HAL: droidmedia's minimediaservice blocks on it at startup (MediaCodecList)
+android.hardware.media.c2@1.2-mediatek-64b.rc

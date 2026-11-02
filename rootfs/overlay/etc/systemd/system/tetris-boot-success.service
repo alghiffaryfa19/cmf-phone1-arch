@@ -1,0 +1,11 @@
+[Unit]
+Description=Mark A/B slot as successfully booted (MTK bootctrl in misc)
+# Only once the UI is up: a boot that never gets this far should still burn a retry.
+After=tetris-phosh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tetris-boot-success
+
+[Install]
+WantedBy=graphical.target

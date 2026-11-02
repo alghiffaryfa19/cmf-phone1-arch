@@ -1,0 +1,9 @@
+#!/bin/sh
+# Start the /dev/stpbt <-> /dev/vhci bridge (tetris-bt-bridge, rootfs/src/) for BlueZ.
+# The BD address lives in the nvdata partition (APCFG/APRDEB/BT_Addr) like on Android.
+modprobe hci_vhci
+mkdir -p /run/tetris-nvdata
+mountpoint -q /run/tetris-nvdata || mount -o ro /dev/disk/by-partlabel/nvdata /run/tetris-nvdata
+cp /run/tetris-nvdata/APCFG/APRDEB/BT_Addr /run/tetris-bt-addr 2>/dev/null
+umount /run/tetris-nvdata
+exec /usr/local/bin/tetris-bt-bridge /run/tetris-bt-addr
