@@ -91,7 +91,10 @@ fastboot flash userdata out/rootfs.simg     # wipes all Android data
 scripts/flash-debug-b.sh                    # our kernel + initramfs to slot b, boot it
 ```
 
-After the first boot, connect USB (the phone is `172.16.42.1`) and run the second stage.
+After the first boot the **screen stays black**. That is expected: Arch's stock
+wlroots lacks phoc's layer-shell patch, and Phosh exits. The second stage fixes this.
+The phone is reachable over USB at `172.16.42.1`. Give it internet (`sudo
+scripts/host-nat.sh up` shares the PC's connection over USB) and run the second stage.
 It builds libhybris, wlroots and the ModemManager plugin on the phone and installs the
 Halium image:
 

@@ -25,6 +25,11 @@ PACKAGES=(
     # system
     networkmanager modemmanager chatty gnome-calls wpa_supplicant iw feedbackd gnome-keyring bluez bluez-utils
     openssh sudo vim htop bash-completion usbutils pciutils e2fsprogs
+    # gcc: crt files + libgcc for the cross-compiled helpers below; the rest for the
+    # on-phone builds of scripts/setup-phone.sh (libhybris, wlroots, ModemManager plugin)
+    base-devel git meson
+    # Halium container for the Android HALs (GPU, modem, camera)
+    lxc
 )
 
 cleanup() {
@@ -80,7 +85,8 @@ if [[ ! -f $P/out/ssh/id_ed25519 ]]; then
     [[ -n ${SUDO_USER:-} ]] && chown -R "$SUDO_USER:" "$P/out/ssh"
 fi
 install -d -m700 -o 1000 -g 1000 "$MNT/home/alarm/.ssh"
-cat "$P/out/ssh/id_ed25519.pub" "$HOME_DIR"/.ssh/*.pub 2>/dev/null > "$MNT/home/alarm/.ssh/authorized_keys"
+cat "$P/out/ssh/id_ed25519.pub" $(compgen -G "$HOME_DIR/.ssh/*.pub" || true) \
+    > "$MNT/home/alarm/.ssh/authorized_keys"
 chown 1000:1000 "$MNT/home/alarm/.ssh/authorized_keys"; chmod 600 "$MNT/home/alarm/.ssh/authorized_keys"
 
 if (( ! FINISH )); then

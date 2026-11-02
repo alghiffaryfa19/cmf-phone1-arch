@@ -3,7 +3,7 @@
 # vendor ueventd.rc. Container ids = host ids (no idmap). Android ids have no host
 # accounts, which OWNER/GROUP need, hence chown.
 SUBSYSTEM=="video4linux|media", MODE="0660", RUN+="/usr/bin/chown 1006:1000 $devnode"
-KERNEL=="mtk_ccd|mtk_hcp|mtk_mdp|mdp_sync|camera-pda|ccu*|vcu|mtk_aov", MODE="0660", RUN+="/usr/bin/chown 1006:1000 $devnode"
+KERNEL=="mtk_ccd|mtk_hcp|mtk_mdp|mdp_sync|camera-pda|ccu*|vcu|mtk_aov", ENV{DEVNAME}=="?*", MODE="0660", RUN+="/usr/bin/chown 1006:1000 $devnode"
 KERNEL=="camera_eeprom*", MODE="0660", RUN+="/usr/bin/chown 1000:1006 $devnode"
 # DMA-BUF heaps: allocating needs only read access; Android's ueventd makes them 0444
 # (owner system) so the camera HAL (and gralloc) can allocate.
