@@ -23,7 +23,7 @@ PACKAGES=(
     phosh phoc squeekboard phosh-mobile-settings gnome-console gnome-control-center
     gnome-text-editor nautilus adwaita-icon-theme cantarell-fonts noto-fonts noto-fonts-emoji
     # system
-    networkmanager modemmanager chatty gnome-calls wpa_supplicant iw feedbackd gnome-keyring bluez bluez-utils
+    networkmanager modemmanager chatty gnome-calls gnome-maps wpa_supplicant iw feedbackd gnome-keyring bluez bluez-utils
     openssh sudo vim htop bash-completion usbutils pciutils e2fsprogs
     # gcc: crt files + libgcc for the cross-compiled helpers below; the rest for the
     # on-phone builds of scripts/setup-phone.sh (libhybris, wlroots, ModemManager plugin)

@@ -1,0 +1,7 @@
+# Overrides /usr/share/dbus-1/services (earlier in XDG_DATA_DIRS). gjs can't dlopen GTK
+# with libhybris' EGL on LD_LIBRARY_PATH ("cannot allocate memory in static TLS block"),
+# so Maps runs without it: GTK then renders with Mesa (llvmpipe, on the CPU); its cairo
+# renderer garbles the map.
+[D-BUS Service]
+Name=org.gnome.Maps
+Exec=/usr/bin/env -u LD_LIBRARY_PATH -u HYBRIS_LD_LIBRARY_PATH -u EGL_PLATFORM LIBGL_ALWAYS_SOFTWARE=1 GSK_RENDERER=gl GDK_DISABLE=vulkan /usr/share/gnome-maps/org.gnome.Maps --gapplication-service
