@@ -9,7 +9,10 @@ lxc.arch = aarch64
 lxc.tty.dir = lxc
 lxc.tty.max = 4
 lxc.pty.max = 1024
-lxc.cap.drop = mac_admin mac_override
+# Android's init must never be able to take the host down: on a failed critical service
+# (e.g. vold) it "reboots", first by reboot(2), then via /proc/sysrq-trigger. That once
+# killed the whole phone. No CAP_SYS_BOOT, and a read-only sysrq-trigger below.
+lxc.cap.drop = mac_admin mac_override sys_boot
 lxc.apparmor.profile = unconfined
 lxc.net.0.type = empty
 lxc.init.cmd = /init
@@ -23,6 +26,7 @@ lxc.mount.entry = /dev/__properties__ dev/__properties__ none bind,create=dir 0 
 lxc.mount.entry = /dev/binderfs dev/binderfs none bind,create=dir 0 0
 lxc.mount.entry = /dev/socket dev/socket none bind,create=dir 0 0
 lxc.mount.entry = proc proc proc nodev,noexec,nosuid 0 0
+lxc.mount.entry = /dev/null proc/sysrq-trigger none bind,ro 0 0
 lxc.mount.entry = sysfs sys sysfs nodev,noexec,nosuid 0 0
 # Android's system_suspend autosuspends via /sys/power/state (and our port never
 # resumes from s2idle) - the container must not be able to suspend the host.
