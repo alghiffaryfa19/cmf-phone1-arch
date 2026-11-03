@@ -1,0 +1,25 @@
+diff --git a/drivers/gpu/drm/panel/panel-samsung-s6e8fc3x02.c b/drivers/gpu/drm/panel/panel-samsung-s6e8fc3x02.c
+index 6662f63..1753677 100644
+--- a/drivers/gpu/drm/panel/panel-samsung-s6e8fc3x02.c
++++ b/drivers/gpu/drm/panel/panel-samsung-s6e8fc3x02.c
+@@ -1484,6 +1484,12 @@ static ssize_t hbm_mode_store(struct kobject *kobj, struct kobj_attribute *attr,
+ 		mtk_ddic_dsi_send_cmd(cmd_msg, 0);
+ 		mdelay(17);
+ 		g_ctx->hbm_stat = true;
++		/*
++		 * Tetris Linux: tell the fingerprint driver, like the DRM HBM path does: it
++		 * only reports "UI ready" (and the optical sensor only captures) with HBM on.
++		 * On Android the composer switches HBM; here userspace uses this file.
++		 */
++		mtk_panel_proc_hbm(1);
+ 	} else if (state == 0) {
+ 		if (g_ctx->hbm_stat == false) {
+ 			pr_info("[%s]Has been in Normal mode\n", __func__);
+@@ -1522,6 +1528,7 @@ static ssize_t hbm_mode_store(struct kobject *kobj, struct kobj_attribute *attr,
+ 		cmd_msg->tx_len[0] = 3;
+ 		mtk_ddic_dsi_send_cmd(cmd_msg, 0);
+ 		g_ctx->hbm_stat = false;
++		mtk_panel_proc_hbm(0);
+ 	}
+ 
+ err:

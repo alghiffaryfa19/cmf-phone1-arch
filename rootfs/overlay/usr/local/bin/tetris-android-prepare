@@ -116,6 +116,8 @@ done
 # which only the stock system image has (taken from system_a once, kept in $T)
 install -d -o 1021 -g 1000 -m 0771 /android/data/vendor/gps
 install -d -o 1021 -g 1000 -m 0771 /android/data/vendor/agps_supl
+# Trustonic TEE storage (fingerprint, gatekeeper)
+install -d -o 1000 -g 1000 -m 0775 /android/data/vendor/mcRegistry
 if [ ! -e "$T/libcurl.so" ]; then
     tetris-map-super --slot a system >/dev/null && mkdir -p "$T/stock-system" &&
         mount -t erofs -o ro /dev/mapper/system_a "$T/stock-system" &&

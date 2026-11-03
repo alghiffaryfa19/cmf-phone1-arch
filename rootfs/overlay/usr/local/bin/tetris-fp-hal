@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fingerprint stack: the TEE services in the Halium container (tetris-fp.rc), then the
+# Goodix fingerprint HAL in the container's namespaces except the network one, so it
+# gets the Goodix driver's netlink events (finger down/up, UI ready). Runs in front.
+A="lxc-attach -n android --"
+for i in $(seq 60); do
+    [ "$($A /system/bin/getprop servicemanager.ready 2>/dev/null)" = true ] && break
+    sleep 1
+done
+# Owners as in the vendor ueventd.rc/init.mt6878.rc (system = 1000); the container has
+# its own /dev, procfs and sysfs entries are shared with the host
+$A /system/bin/chown system:system /dev/goodix_fp /dev/mobicore /dev/mobicore-user
+$A /system/bin/chmod 0660 /dev/goodix_fp /dev/mobicore-user
+chown 1000:1000 /proc/touchpanel/fod_mode /sys/panel_feature/hbm_mode /sys/panel_feature/ui_status
+$A /system/bin/setprop ctl.start mobicore
+$A /system/bin/setprop ctl.start tee-1-1
+$A /system/bin/setprop ctl.start vendor.gatekeeper-default
+for i in $(seq 30); do
+    $A /system/bin/service check android.hardware.gatekeeper.IGatekeeper/default 2>/dev/null |
+        grep -q ': found' && break
+    sleep 1
+done
+exec lxc-attach -n android -s "MOUNT|PID|UTSNAME|IPC" -u 1000 -g 1000 -- \
+    /vendor/bin/hw/vendor.nothing.hardware.biometrics.fingerprint-service

@@ -1,0 +1,49 @@
+# Fingerprint in the Halium container, started by tetris-fp-hal (tetris-fp.service) via
+# ctl.start: the Trustonic TEE daemon (from trustonic.rc), its HAL and the gatekeeper
+# (Goodix' trusted app checks gatekeeper tokens). The fingerprint HAL itself is started
+# by tetris-fp-hal outside the container's network namespace: it gets finger-down
+# events by netlink from the Goodix kernel driver, which only exists in the host's.
+service mobicore /vendor/bin/mcDriverDaemon --P1 /mnt/vendor/persist/mcRegistry \
+    -r /vendor/app/mcRegistry/06090000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/020f0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05120000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05120000000000000000000000000001.drbin \
+    -r /vendor/app/mcRegistry/05160000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/020b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05070000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/030b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/03100000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/030c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/031c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/032c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/033c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/034c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/035c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/036c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/037c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/40188311faf343488db888ad39496f9a.drbin \
+    -r /vendor/app/mcRegistry/070c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/090b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/0f5eed3c3b5a47afacca69a84bf0efad.drbin \
+    -r /vendor/app/mcRegistry/07060000000000000000000000007169.drbin \
+    -r /vendor/app/mcRegistry/4be4f7dc1f2c11e5b5f7727283247c7f.drbin \
+    -r /vendor/app/mcRegistry/08070000000000000000000000008270.drbin \
+    -r /vendor/app/mcRegistry/07070000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/07407000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/9073f03a9618383bb1856eb3f990babd.drbin \
+    -r /vendor/app/mcRegistry/6b3f5fa0f8cf55a7be2582587d62d63a.drbin \
+    -r /vendor/app/mcRegistry/5020170115e016302017012521300000.drbin \
+    -r /vendor/app/mcRegistry/07210000000000000000000000000000.drbin
+    user system
+    group system
+    disabled
+
+service tee-1-1 /vendor/bin/hw/vendor.trustonic.tee@1.1-service
+    user system
+    group system
+    disabled
+
+service vendor.gatekeeper-default /vendor/bin/hw/android.hardware.gatekeeper-service.trustonic
+    user system
+    group system
+    disabled

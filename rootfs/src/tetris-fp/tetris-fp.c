@@ -24,8 +24,10 @@
  * The AIDL interfaces are stable and public, so the parcels are written by hand:
  * transaction code = 1 + index of the method.
  */
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <linux/input.h>
 #include <fcntl.h>
 #include <hybris/common/dlfcn.h>
 #include <pthread.h>
@@ -34,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -47,7 +50,8 @@
 enum { FP_GET_SENSOR_PROPS = 1, FP_CREATE_SESSION = 2 };
 /* ISession */
 enum { S_GENERATE_CHALLENGE = 1, S_REVOKE_CHALLENGE = 2, S_ENROLL = 3, S_AUTHENTICATE = 4,
-       S_ENUMERATE = 6, S_REMOVE = 7, S_CLOSE = 11 };
+       S_ENUMERATE = 6, S_REMOVE = 7, S_CLOSE = 11, S_POINTER_DOWN = 12, S_POINTER_UP = 13,
+       S_UI_READY = 14 };
 /* ISessionCallback */
 enum { CB_CHALLENGE = 1, CB_ACQUIRED = 3, CB_ERROR = 4, CB_ENROLL_PROGRESS = 5,
        CB_AUTH_OK = 6, CB_AUTH_FAILED = 7, CB_LOCKOUT_TIMED = 8, CB_LOCKOUT_PERMANENT = 9,
@@ -78,6 +82,7 @@ static struct {
 	void (*parcelDelete)(AParcel *);
 	binder_status_t (*writeInt32)(AParcel *, int32_t);
 	binder_status_t (*writeInt64)(AParcel *, int64_t);
+	binder_status_t (*writeFloat)(AParcel *, float);
 	binder_status_t (*writeStrongBinder)(AParcel *, AIBinder *);
 	binder_status_t (*writeString)(AParcel *, const char *, int32_t);
 	binder_status_t (*writeByteArray)(AParcel *, const int8_t *, int32_t);
@@ -545,6 +550,129 @@ static int mint_token(int64_t challenge, struct hat *hat)
 	return call(gk, GK_VERIFY, "gatekeeper verify", w_gk_verify, &v, r_gk_verify, hat);
 }
 
+struct sensor {
+	int32_t id, type, x, y, radius;
+};
+
+/* --- touch: the optical sensor under the display -------------------------------------
+ * The HAL needs to know when a finger is on the sensor (onPointerDown) and when the
+ * spot that lights it is shown (onUiReady); on Android SystemUI does both. We read the
+ * touchscreen directly (libinput in phoc doesn't grab it); tetris-fp-overlay draws the
+ * spot. */
+
+struct touch_args {
+	AIBinder *session;
+	struct sensor *sensor;
+};
+
+struct pointer {
+	int32_t id, x, y;
+	float minor, major;
+};
+
+static void w_pointer_down(AParcel *in, void *arg)
+{
+	struct pointer *p = arg;
+
+	b.writeInt32(in, p->id);
+	b.writeInt32(in, p->x);
+	b.writeInt32(in, p->y);
+	b.writeFloat(in, p->minor);
+	b.writeFloat(in, p->major);
+}
+
+static void w_i32(AParcel *in, void *arg) { b.writeInt32(in, *(int32_t *)arg); }
+
+/* The Goodix driver tells the HAL "UI ready" (and the HAL only then captures) once the
+ * panel driver has both high brightness and the UI status set; SystemUI does that on
+ * Android when it has drawn the spot. */
+static void panel_feature(const char *name, int on)
+{
+	char path[64];
+	int fd;
+
+	snprintf(path, sizeof(path), "/sys/panel_feature/%s", name);
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0 || write(fd, on ? "1" : "0", 1) != 1)
+		fprintf(stderr, "tetris-fp: %s: %s\n", path, strerror(errno));
+	if (fd >= 0)
+		close(fd);
+}
+
+static int open_touchscreen(void)
+{
+	DIR *d = opendir("/dev/input");
+	struct dirent *e;
+	int fd = -1;
+
+	while (d && (e = readdir(d)) && fd < 0) {
+		char path[300], name[64] = "";
+
+		if (strncmp(e->d_name, "event", 5))
+			continue;
+		snprintf(path, sizeof(path), "/dev/input/%s", e->d_name);
+		fd = open(path, O_RDONLY | O_CLOEXEC);
+		if (fd >= 0 && (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0 ||
+				strcmp(name, "fts_ts"))) {
+			close(fd);
+			fd = -1;
+		}
+	}
+	if (d)
+		closedir(d);
+	return fd;
+}
+
+static void *touch_thread(void *arg)
+{
+	struct touch_args *t = arg;
+	struct pointer p = { .id = 0, .minor = 1, .major = 1 };
+	int32_t x = 0, y = 0, major = 0, slot = 0;
+	bool touching = false, down = false;
+	struct input_event ev;
+	int fd = open_touchscreen();
+
+	if (fd < 0) {
+		fprintf(stderr, "tetris-fp: no touchscreen\n");
+		return NULL;
+	}
+	while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
+		if (ev.type == EV_ABS && ev.code == ABS_MT_SLOT)
+			slot = ev.value;
+		else if (ev.type == EV_ABS && slot == 0 && ev.code == ABS_MT_POSITION_X)
+			x = ev.value;
+		else if (ev.type == EV_ABS && slot == 0 && ev.code == ABS_MT_POSITION_Y)
+			y = ev.value;
+		else if (ev.type == EV_ABS && slot == 0 && ev.code == ABS_MT_TOUCH_MAJOR)
+			major = ev.value;
+		else if (ev.type == EV_KEY && ev.code == BTN_TOUCH)
+			touching = ev.value;
+		else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
+			int64_t dx = x - t->sensor->x, dy = y - t->sensor->y;
+			int64_t r = t->sensor->radius;
+			bool on = touching && dx * dx + dy * dy <= r * r;
+
+			if (on && !down) {
+				p.x = x;
+				p.y = y;
+				p.major = p.minor = major > 0 ? major : 1;
+				call(t->session, S_POINTER_DOWN, "onPointerDown", w_pointer_down,
+				     &p, NULL, NULL);
+				panel_feature("hbm_mode", 1);
+				panel_feature("ui_status", 1);
+				call(t->session, S_UI_READY, "onUiReady", NULL, NULL, NULL, NULL);
+			} else if (!on && down) {
+				call(t->session, S_POINTER_UP, "onPointerUp", w_i32, &p.id, NULL,
+				     NULL);
+				panel_feature("ui_status", 0);
+				panel_feature("hbm_mode", 0);
+			}
+			down = on;
+		}
+	}
+	return NULL;
+}
+
 /* --- main ------------------------------------------------------------------------- */
 
 #define SYM(field, name) do { \
@@ -554,10 +682,6 @@ static int mint_token(int64_t challenge, struct hat *hat)
 			return 1; \
 		} \
 	} while (0)
-
-struct sensor {
-	int32_t id, type, x, y, radius;
-};
 
 /* SensorProps[]: count, then SensorProps { CommonProps commonProps { sensorId, ... },
  * FingerprintSensorType sensorType, SensorLocation[] sensorLocations { displayId, x, y,
@@ -616,6 +740,7 @@ int main(int argc, char **argv)
 	SYM(parcelDelete, "AParcel_delete");
 	SYM(writeInt32, "AParcel_writeInt32");
 	SYM(writeInt64, "AParcel_writeInt64");
+	SYM(writeFloat, "AParcel_writeFloat");
 	SYM(writeStrongBinder, "AParcel_writeStrongBinder");
 	SYM(writeString, "AParcel_writeString");
 	SYM(writeByteArray, "AParcel_writeByteArray");
@@ -668,6 +793,14 @@ int main(int argc, char **argv)
 	any_class = b.classDefine("android.hardware.biometrics.fingerprint.ISession",
 				  noop_create, noop_destroy, noop_transact);
 	b.associateClass(session, any_class);
+	if (sensor.type == 2 || sensor.type == 3) {
+		static struct touch_args t;
+		pthread_t th;
+
+		t.session = session;
+		t.sensor = &sensor;
+		pthread_create(&th, NULL, touch_thread, &t);
+	}
 
 	if (!strcmp(cmd, "list") || !strcmp(cmd, "clear")) {
 		if (call(session, S_ENUMERATE, "enumerateEnrollments", NULL, NULL, NULL, NULL))
@@ -695,7 +828,7 @@ int main(int argc, char **argv)
 		}
 		if (mint_token(st.challenge, &hat))
 			goto out;
-		printf("touch the sensor (power button) repeatedly\n");
+		printf("put your finger on the sensor, lift it, repeat\n");
 		if (call(session, S_ENROLL, "enroll", w_hat, &hat, r_binder, &cancel))
 			goto out;
 		ret = wait_done(120) ? 1 : 0;
