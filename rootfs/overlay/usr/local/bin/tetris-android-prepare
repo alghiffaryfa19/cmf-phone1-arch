@@ -46,6 +46,10 @@ while read -r f; do
     case "$f" in ''|\#*) continue ;; esac
     cp "$T/vendor/etc/init/$f" "$T/vendor-init/$f" && log "vendor init: $f"
 done < /etc/tetris-android/vendor-init.allow
+# Our own rc files, for vendor services that live in rc files we can't allow whole
+for f in /etc/tetris-android/init/*.rc; do
+    [ -e "$f" ] && cp "$f" "$T/vendor-init/" && log "own init: ${f##*/}"
+done
 
 if ! mountpoint -q /dev/binderfs; then
     mkdir -p /dev/binderfs
@@ -101,10 +105,22 @@ for p in nvram nvdata nvcfg protect1 protect2 persist proinfo; do
     n=$(readlink -f "/dev/disk/by-partlabel/$p") || continue
     echo "lxc.mount.entry = $n dev/block/by-name/$p none bind,create=file 0 0" >> "$C"
 done
-# Camera: V4L2/media nodes plus MediaTek's camera helpers for the camera HAL
-# (owners set by 78-tetris-camera.rules, as in vendor ueventd.rc).
+# Camera: V4L2/media nodes plus MediaTek's camera helpers for the camera HAL, and the GPS
+# chip for mnld (owners set by 78-tetris-*.rules, as in vendor ueventd.rc).
 for n in /dev/video* /dev/media* /dev/v4l-subdev* /dev/mtk_ccd /dev/mtk_hcp /dev/mtk_mdp \
-        /dev/mdp_sync /dev/camera-pda /dev/ccu* /dev/vcu /dev/mtk_aov /dev/camera_eeprom*; do
+        /dev/mdp_sync /dev/camera-pda /dev/ccu* /dev/vcu /dev/mtk_aov /dev/camera_eeprom* \
+        /dev/gpsdl* /dev/gps_pwr /dev/gps_emi /dev/gps2scp; do
     [ -c "$n" ] && echo "lxc.mount.entry = $n dev/${n#/dev/} none bind,create=file 0 0" >> "$C"
 done
+# GPS: mnld keeps its state (ephemeris, config) in /data/vendor/gps, and links libcurl,
+# which only the stock system image has (taken from system_a once, kept in $T)
+install -d -o 1021 -g 1000 -m 0771 /android/data/vendor/gps
+if [ ! -e "$T/libcurl.so" ]; then
+    tetris-map-super --slot a system >/dev/null && mkdir -p "$T/stock-system" &&
+        mount -t erofs -o ro /dev/mapper/system_a "$T/stock-system" &&
+        cp "$T/stock-system/system/lib64/libcurl.so" "$T/libcurl.so"
+    umount "$T/stock-system" 2>/dev/null; dmsetup remove system_a 2>/dev/null
+fi
+[ -e "$T/libcurl.so" ] && install -m 0644 "$T/libcurl.so" "$A/rootfs/system/lib64/libcurl.so" ||
+    log "no libcurl.so for mnld, GPS won't work"
 log "ready"

@@ -6,6 +6,7 @@
 #   3. wlroots0.20 with our hwcomposer backend (GPU Phosh)
 #   4. ModemManager plugin for the MediaTek modem
 #   5. camera app
+#   6. GPS client (tetris-gnss)
 # then enables GPU Phosh and reboots. Takes a while (libhybris and wlroots compile on
 # the phone) and needs internet on the phone (WLAN, or `sudo scripts/host-nat.sh up`).
 #
@@ -25,11 +26,12 @@ scp_ "$IMG" "$PHONE:system.img"
 "$SSH" 'echo alarm | sudo -S -p "" install -Dm644 system.img /var/lib/lxc/android/system.img && rm system.img'
 
 echo "== sources and patches"
-"$SSH" 'rm -rf ~/libhybris-patches ~/mm-plugin-tetris ~/tetris-camera-app; mkdir -p ~/libhybris-patches'
+"$SSH" 'rm -rf ~/libhybris-patches ~/mm-plugin-tetris ~/tetris-camera-app ~/tetris-gnss; mkdir -p ~/libhybris-patches'
 scp_ "$P"/pkgbuilds/*.sh "$P/patches/wlroots/0002-hwcomposer-backend-hybris-allocator.patch" "$PHONE:"
 scp_ "$P"/patches/libhybris/*.patch "$PHONE:libhybris-patches/"
 scp_ -r "$P/patches/modemmanager/tetris" "$PHONE:mm-plugin-tetris"
 scp_ -r "$P/rootfs/src/tetris-camera-app" "$PHONE:tetris-camera-app"
+scp_ -r "$P/rootfs/src/tetris-gnss" "$PHONE:tetris-gnss"
 
 echo "== libhybris"
 "$SSH" '~/build-libhybris.sh'
@@ -39,6 +41,9 @@ echo "== ModemManager plugin"
 "$SSH" '~/build-mm-plugin-tetris.sh'
 echo "== camera app"
 "$SSH" 'make -C ~/tetris-camera-app && echo alarm | sudo -S -p "" make -C ~/tetris-camera-app install'
+
+echo "== GPS"
+"$SSH" 'make -C ~/tetris-gnss && echo alarm | sudo -S -p "" sh -c "make -C ~/tetris-gnss install && systemctl enable tetris-gnss"'
 
 echo "== GPU Phosh on, reboot"
 "$SSH" 'echo alarm | sudo -S -p "" sh -c "touch /etc/tetris-android/gpu-shell; systemctl reboot"' || true

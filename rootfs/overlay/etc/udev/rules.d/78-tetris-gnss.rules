@@ -1,0 +1,3 @@
+# GPS chip nodes belong to Android's gps user (uid/gid 1021) for mnld in the Halium
+# container, as in the vendor ueventd.rc
+KERNEL=="gpsdl[0-9]|gps_pwr|gps_emi|gps2scp", MODE="0660", RUN+="/usr/bin/chown 1021:1021 $devnode"

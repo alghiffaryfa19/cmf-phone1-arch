@@ -1,0 +1,27 @@
+# GPS in the Halium container, started by tetris-gnss.service via ctl.start. From the
+# vendor's hw/init_conninfra.rc, hw/init.connectivity.common.rc (which also hold WLAN/BT
+# services the Linux side owns) and android.hardware.gnss-service.mediatek.rc.
+
+# Reads the connectivity chip ids from /dev/conninfra_dev into vendor.connsys.* properties;
+# mnld won't run without them
+service conninfra_loader /vendor/bin/conninfra_loader
+    user system
+    group system
+    oneshot
+    disabled
+
+service mnld /vendor/bin/mnld
+    user gps
+    capabilities WAKE_ALARM
+    group gps inet misc sdcard_rw sdcard_r media_rw system radio wakelock
+    socket mnld stream 660 gps system
+    disabled
+
+# The linker config of the Halium system doesn't search /vendor/lib64/hw, where its
+# implementation library lives
+service vendor.gnss-tetris /vendor/bin/hw/android.hardware.gnss-service.mediatek
+    user system
+    group system gps
+    capabilities WAKE_ALARM
+    setenv LD_LIBRARY_PATH /vendor/lib64/hw
+    disabled

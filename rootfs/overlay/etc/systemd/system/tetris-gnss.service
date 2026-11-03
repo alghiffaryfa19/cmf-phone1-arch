@@ -1,0 +1,14 @@
+[Unit]
+Description=GPS: NMEA from the GNSS HAL in the Halium container for geoclue
+Requires=tetris-android.service
+After=tetris-android.service
+Before=geoclue.service
+
+[Service]
+ExecStartPre=/usr/local/bin/tetris-gnss-hal
+ExecStart=/usr/local/bin/tetris-gnss
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
