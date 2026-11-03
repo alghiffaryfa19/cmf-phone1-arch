@@ -21,6 +21,7 @@
 #define SYS_openat  56
 #define SYS_close   57
 #define SYS_read    63
+#define SYS_write   64
 #define SYS_ppoll   73
 #define SYS_exit    93
 #define SYS_mmap   222
@@ -164,6 +165,35 @@ static int load_ppm(const char *path)
 	return 0;
 }
 
+/* One line to the kernel log, so a boot without anyone watching shows whether it drew */
+static void klog(const char *msg, uint32_t w, uint32_t h)
+{
+	char line[96], *p = line;
+	long fd;
+
+	for (const char *s = "<6>tetris-splash: "; *s; )
+		*p++ = *s++;
+	while (*msg)
+		*p++ = *msg++;
+	for (int i = 0; i < 2; i++) {
+		uint32_t v = i ? h : w, d = 1000000;
+
+		if (!w)
+			break;
+		*p++ = i ? 'x' : ' ';
+		while (d > v && d > 1)
+			d /= 10;
+		for (; d; d /= 10)
+			*p++ = '0' + v / d % 10;
+	}
+	*p++ = '\n';
+	fd = sys6(SYS_openat, AT_FDCWD, (long)"/dev/kmsg", 01 /* O_WRONLY */ | O_CLOEXEC, 0, 0, 0);
+	if (fd >= 0) {
+		sys(SYS_write, fd, line, p - line);
+		sys(SYS_close, fd, 0, 0);
+	}
+}
+
 /* --- main ----------------------------------------------------------------------- */
 
 static int run(int argc, char **argv)
@@ -268,8 +298,11 @@ static int run(int argc, char **argv)
 	crtc.count_connectors = 1;
 	crtc.mode = modes[0];
 	crtc.mode_valid = 1;
-	if (sys(SYS_ioctl, fd, DRM_IOCTL_MODE_SETCRTC, &crtc))
+	if (sys(SYS_ioctl, fd, DRM_IOCTL_MODE_SETCRTC, &crtc)) {
+		klog("SETCRTC failed", 0, 0);
 		return 1;
+	}
+	klog("showing Tux on", dumb.width, dumb.height);
 
 	/* Keep the framebuffer (and the picture) until we're killed, at most 60 s */
 	for (int i = 0; i < 60; i++) {
