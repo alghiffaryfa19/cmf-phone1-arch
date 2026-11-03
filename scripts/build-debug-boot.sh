@@ -33,6 +33,10 @@ mkdir -p "$R/vendor"; cp -a "$OUT/vendor-extract/vendor/firmware" "$R/vendor/"
 # reboot-mode bootloader|recovery|...: busybox reboot can't pass a reboot argument
 "$P/toolchain/clang-r487747c/bin/clang" --target=aarch64-linux-gnu -O2 -static -nostdlib \
     -ffreestanding -fno-stack-protector -fuse-ld=lld -o "$R/bin/reboot-mode" "$P/initramfs/tools/reboot-mode.c"
+# Boot splash: Tux from the kernel tree, shown until the composer/phoc take the display
+"$P/toolchain/clang-r487747c/bin/clang" --target=aarch64-linux-gnu -O2 -static -nostdlib \
+    -ffreestanding -fno-stack-protector -fuse-ld=lld -o "$R/bin/tetris-splash" "$P/initramfs/tools/tetris-splash.c"
+install -Dm644 "$P/src/kernel-6.1/drivers/video/logo/logo_linux_clut224.ppm" "$R/etc/tux.ppm"
 
 # Index every built module by basename
 declare -A KO

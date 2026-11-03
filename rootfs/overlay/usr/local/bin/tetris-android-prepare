@@ -7,6 +7,10 @@ A=/var/lib/lxc/android
 T=/var/lib/tetris-android
 log() { echo "tetris-android-prepare: $*"; }
 
+# The boot splash must not hold DRM master when the composer HAL starts (it would spin
+# at RT priority); tetris-splash-stop.service normally ended it already
+pkill -x tetris-splash && sleep 0.2
+
 mkdir -p "$A/rootfs" "$T/system" /android/data /dev/__properties__ /dev/socket /odm /vendor_dlkm "$T/vendor"
 # init recreates the property area and its sockets; stale ones from a previous
 # container run make the new init crash

@@ -1,0 +1,13 @@
+[Unit]
+Description=End the boot splash (Tux) before the composer or phoc take the display
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target tetris-android.service tetris-phosh.service
+
+[Service]
+Type=oneshot
+# The splash process comes from the initramfs (tetris-splash in initramfs/tools)
+ExecStart=-/usr/bin/pkill -x tetris-splash
+
+[Install]
+WantedBy=basic.target

@@ -138,6 +138,9 @@ for e in /sys/class/input/event*; do
         gpio-keys|mtk-pmic-keys) KEYDEVS="$KEYDEVS /dev/input/${e##*/}" ;;
     esac
 done
+# Tux on the display (after the WLAN NVRAM write above: the first unblank starts
+# conninfra's pre-cal). Keeps running across switch_root; tetris-splash-stop.service ends it.
+setsid tetris-splash /etc/tux.ppm </dev/null >/dev/null 2>&1 &
 for k in $KEYDEVS; do (timeout 3 head -c 24 "$k" > /tmp/key.${k##*/}) & done
 sleep 3.2
 for f in /tmp/key.*; do [ -s "$f" ] && KEYPRESS=1; done
