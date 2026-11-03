@@ -25,3 +25,13 @@ service vendor.gnss-tetris /vendor/bin/hw/android.hardware.gnss-service.mediatek
     capabilities WAKE_ALARM
     setenv LD_LIBRARY_PATH /vendor/lib64/hw
     disabled
+
+# mnld gets the modem's time and crystal (TSX) data through agpsd; without them it
+# hardly finds satellites (from mtk_agpsd_p.rc)
+service agpsd /vendor/bin/mtk_agpsd
+    user gps
+    group gps radio inet sdcard_r sdcard_rw misc system
+    socket agpsd stream 660 gps system
+    socket agpsd2 stream 660 gps inet
+    socket agpsd3 stream 660 gps inet
+    disabled

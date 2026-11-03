@@ -112,9 +112,10 @@ for n in /dev/video* /dev/media* /dev/v4l-subdev* /dev/mtk_ccd /dev/mtk_hcp /dev
         /dev/gpsdl* /dev/gps_pwr /dev/gps_emi /dev/gps2scp; do
     [ -c "$n" ] && echo "lxc.mount.entry = $n dev/${n#/dev/} none bind,create=file 0 0" >> "$C"
 done
-# GPS: mnld keeps its state (ephemeris, config) in /data/vendor/gps, and links libcurl,
+# GPS: mnld and agpsd keep their state in /data/vendor, and mnld links libcurl,
 # which only the stock system image has (taken from system_a once, kept in $T)
 install -d -o 1021 -g 1000 -m 0771 /android/data/vendor/gps
+install -d -o 1021 -g 1000 -m 0771 /android/data/vendor/agps_supl
 if [ ! -e "$T/libcurl.so" ]; then
     tetris-map-super --slot a system >/dev/null && mkdir -p "$T/stock-system" &&
         mount -t erofs -o ro /dev/mapper/system_a "$T/stock-system" &&

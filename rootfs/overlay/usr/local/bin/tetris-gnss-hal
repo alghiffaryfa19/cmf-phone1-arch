@@ -11,6 +11,9 @@ for i in $(seq 20); do
     [ "$($A /system/bin/getprop vendor.connsys.driver.ready 2>/dev/null)" = yes ] && break
     sleep 0.5
 done
+# agpsd talks to the modem on /dev/ttyC2, radio:radio as in the vendor ueventd.rc
+chown 1001:1001 /dev/ttyC2
+$A /system/bin/setprop ctl.start agpsd
 $A /system/bin/setprop ctl.start mnld
 $A /system/bin/setprop ctl.start vendor.gnss-tetris
 for i in $(seq 30); do

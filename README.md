@@ -31,7 +31,8 @@ used through [libhybris](https://github.com/libhybris/libhybris).
 | SMS send | ✅ | Chats (Chatty) |
 | Calls | ❌ | Incoming calls don't ring: the modem falls back to 2G for the call but never reports it to Linux. Probably a MediaTek init command is missing. No VoLTE (needs MediaTek's IMS stack). Help welcome |
 | Standby (suspend) | ❌ | The SoC hangs in deep sleep. The screen can still turn off, but the CPU stays awake |
-| Fingerprint, NFC, GPS | ❌ | Not started |
+| GPS | 🟡 | MediaTek GNSS HAL + `tetris-gnss` feed geoclue (receiver on only while an app asks). Satellites are found, a first fix not confirmed yet |
+| Fingerprint | ❌ | Not started (the phone has no NFC) |
 
 ## How it is put together
 
@@ -43,7 +44,7 @@ used through [libhybris](https://github.com/libhybris/libhybris).
   from `userdata`. Slot a keeps Nothing OS. The bootloader has no `fastboot boot`, so
   every test means flashing slot b.
 - **Halium container (LXC):** a LuneOS Halium 16 GSI runs the vendor HALs: gralloc,
-  composer, modem (`ccci_mdinit`), camera, power and codec2. It runs in its own network
+  composer, modem (`ccci_mdinit`), camera, power, codec2 and GNSS. It runs in its own network
   namespace and cannot suspend the host.
 - **GPU:** a wlroots 0.20 **hwcomposer backend**, a gralloc allocator and
   `android_wlegl` client buffers (`patches/wlroots/`). phoc composites on the Mali GPU
@@ -52,7 +53,8 @@ used through [libhybris](https://github.com/libhybris/libhybris).
   MediaTek's AT and data interface (`patches/modemmanager/tetris`).
 - **Own services** (`rootfs/overlay`, `rootfs/src`): Phosh session with GPU/software
   selection and crash guard, `tetris-sensors`, `tetris-vibra`, `tetris-torch`, the
-  camera stack (`tetris-camera`) and the **Kamera** app (Camera2 NDK via libhybris).
+  camera stack (`tetris-camera`), the **Kamera** app (Camera2 NDK via libhybris) and
+  `tetris-gnss` (GPS NMEA for geoclue).
 
 ## Building and installing
 
