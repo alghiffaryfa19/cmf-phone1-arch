@@ -22,7 +22,7 @@ used through [libhybris](https://github.com/libhybris/libhybris).
 | WLAN | ✅ | MediaTek gen4m driver |
 | Bluetooth | ✅ | |
 | Battery / charging | ✅ | |
-| Audio (speaker, mic) | ✅ | UCM config; headphone jack detection should now work, but it is not tested |
+| Audio (speaker, mic) | ✅ | UCM config. The phone has no 3.5 mm jack; analog headsets via a passive USB-C adapter should be detected (codec "Headset Jack"), untested |
 | Vibration | ✅ | feedbackd through a force-feedback bridge (`tetris-vibra`) |
 | Torch | ✅ | Phosh quick setting (`tetris-torch`, flash LED via uleds) |
 | Cameras | ✅ | Main (50 MP), front, and the rear IR depth sensor; own app **Kamera** with an IR false-colour mode |
