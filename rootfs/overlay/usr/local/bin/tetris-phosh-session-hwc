@@ -10,6 +10,9 @@ set +a
 # only the GL/hwc2 libs (see tetris-android-prepare): libhybris' libvulkan crashes phoc
 export LD_LIBRARY_PATH=/opt/tetris-hybris-gl/lib
 export WLR_BACKENDS=hwcomposer,libinput
+# Redraw whole frames: with partial redraws (buffer age) stale parts of older frames
+# flashed up for a frame in every app
+export PHOC_DEBUG=damage-whole
 unset WLR_RENDERER
 PHOC_INI=/usr/share/phosh/phoc.ini
 [ -f /etc/phosh/phoc.ini ] && PHOC_INI=/etc/phosh/phoc.ini
