@@ -2,7 +2,7 @@
 # with, which is the internet APN on most networks. (gsm.auto-config looks the APN up by
 # operator id, but many virtual operators share one id, e.g. 262-03, and it picks wrong.)
 # Set gsm.apn here if your provider needs a different one.
-# Phosh's mobile data switch turns it on and off. IPv4 only for now.
+# Phosh's mobile data switch turns it on and off. IPv4 and IPv6.
 [connection]
 id=Mobile data
 type=gsm
@@ -14,4 +14,4 @@ autoconnect=true
 method=auto
 
 [ipv6]
-method=disabled
+method=auto

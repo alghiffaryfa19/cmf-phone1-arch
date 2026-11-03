@@ -26,7 +26,7 @@ used through [libhybris](https://github.com/libhybris/libhybris).
 | Vibration | ✅ | feedbackd through a force-feedback bridge (`tetris-vibra`) |
 | Torch | ✅ | Phosh quick setting (`tetris-torch`, flash LED via uleds) |
 | Cameras | ✅ | Main (50 MP), front, and the rear IR depth sensor; own app **Kamera** with an IR false-colour mode |
-| Mobile data (LTE) | ✅ | ModemManager with our plugin for the MediaTek modem; IPv4 only for now |
+| Mobile data (LTE) | ✅ | ModemManager with our plugin for the MediaTek modem, IPv4 + IPv6; works without configuring an APN |
 | SIM PIN, SMS receive | ✅ | Chats (Chatty) |
 | SMS send | ❓ | Not tested |
 | Calls | ❌ | Incoming calls don't ring: the modem falls back to 2G for the call but never reports it to Linux. Probably a MediaTek init command is missing. No VoLTE (needs MediaTek's IMS stack). Help welcome |
