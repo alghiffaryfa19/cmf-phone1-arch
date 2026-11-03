@@ -10,19 +10,15 @@
  *   tetris-fp list         list enrolled fingers
  *   tetris-fp clear        remove all enrolled fingers
  *   tetris-fp props        sensor type and position
+ *   tetris-fp unlockd      fingerprint unlock for the Phosh lock screen (tetris-fpd.service):
+ *                          while the session is locked and the display on, show the
+ *                          sensor spot and scan; unlock through logind on a match
  *
- * STATUS (2026-11-03): work in progress. Talks to the HAL (gatekeeper token accepted,
- * enrollment starts), but the sensor is optical under the display: it needs the touch
- * (onPointerDown/onUiReady) and a bright spot drawn at its position (540,2109 r93), which
- * on Android SystemUI does. Started by hand: mcDriverDaemon, tee@1.1, gatekeeper and the
- * fingerprint HAL in the container, /dev/goodix_fp chowned to system there.
- *
- * Enrolling needs a HardwareAuthToken from the gatekeeper (also in the TEE), as Android
- * gets it when you confirm your PIN. We enroll an internal random secret with the
- * gatekeeper once (kept root-only in /var/lib/tetris-fp) and verify it to mint tokens.
- *
- * The AIDL interfaces are stable and public, so the parcels are written by hand:
- * transaction code = 1 + index of the method.
+ * STATUS (2026-11-03): enroll and verify work (spot from tetris-fp-overlay, HBM via the
+ * patched panel driver, HAL outside the container's netns: tetris-fp.service). Unlock
+ * (unlockd, tetris-fpd.service) is not enabled: if the touch controller's fingerprint
+ * mode gets set while the display is off (the HAL does that after enumerating or
+ * cancelling), touch input stays dead after the display comes back on.
  */
 #include <dirent.h>
 #include <dlfcn.h>
@@ -31,6 +27,7 @@
 #include <fcntl.h>
 #include <hybris/common/dlfcn.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -407,6 +404,8 @@ static void w_ids(AParcel *in, void *arg)
 	b.writeInt32Array(in, ids->data, ids->len);
 }
 
+static int last_result = -ETIMEDOUT;
+
 /* waits for the result of an operation; timeout in seconds */
 static int wait_done(int timeout)
 {
@@ -419,6 +418,7 @@ static int wait_done(int timeout)
 	while (!st.done && ret != ETIMEDOUT)
 		ret = pthread_cond_timedwait(&cond, &lock, &ts);
 	ret = st.done ? st.result : -ETIMEDOUT;
+	last_result = ret;
 	st.done = false;
 	pthread_mutex_unlock(&lock);
 	return ret;
@@ -673,6 +673,200 @@ static void *touch_thread(void *arg)
 	return NULL;
 }
 
+/* The touch controller's fingerprint mode (/proc/touchpanel/fod_mode: 0 off, 1 on,
+ * 2 "unlock", for unlocking with the screen off). The HAL sets 1 for a scan and 2 after
+ * enumerating or cancelling, but with the mode on, the touch driver doesn't come back
+ * from the display going off: no touches until a reboot. So: 1 only while we scan with
+ * the display on, 0 otherwise. */
+static void fod_mode(int mode)
+{
+	char c = '0' + mode;
+	int fd = open("/proc/touchpanel/fod_mode", O_WRONLY | O_CLOEXEC);
+
+	if (fd < 0 || write(fd, &c, 1) != 1)
+		fprintf(stderr, "tetris-fp: fod_mode: %s\n", strerror(errno));
+	if (fd >= 0)
+		close(fd);
+}
+
+/* Leave the panel and touch controller as we found them, also when killed (tetris-fpd
+ * stops us when the session gets unlocked by PIN); cancelling tells the HAL to stop
+ * scanning and switch the touch controller's fingerprint mode off */
+static AIBinder *g_session, *g_cancel;
+static bool g_scanned;
+
+static void set_cancel(AIBinder *cancel)
+{
+	if (cancel)
+		b.associateClass(cancel, b.classDefine(
+			"android.hardware.biometrics.common.ICancellationSignal", noop_create,
+			noop_destroy, noop_transact));
+	g_cancel = cancel;
+	g_scanned = true;
+}
+
+static bool st_finished(void)
+{
+	/* wait_done() consumed st.done; a result other than a timeout ends the operation */
+	return last_result != -ETIMEDOUT;
+}
+
+static void cleanup(void)
+{
+	if (g_cancel)
+		call(g_cancel, 1, "cancel", NULL, NULL, NULL, NULL);
+	if (g_scanned) {
+		panel_feature("ui_status", 0);
+		panel_feature("hbm_mode", 0);
+	}
+	if (g_session)
+		call(g_session, S_CLOSE, "close", NULL, NULL, NULL, NULL);
+	fod_mode(0);
+}
+
+static void *signal_thread(void *arg)
+{
+	sigset_t *set = arg;
+	int sig;
+
+	sigwait(set, &sig);
+	cleanup();
+	_exit(3);
+}
+
+/* --- unlockd ----------------------------------------------------------------------- */
+
+static char lock_session[32], lock_user[64];
+
+/* the graphical user session: id and user name */
+static bool find_session(void)
+{
+	FILE *f = popen("loginctl list-sessions --no-legend 2>/dev/null", "r");
+	char line[256], id[32], user[64], seat[32];
+	unsigned uid;
+	bool found = false;
+
+	/* SESSION UID USER SEAT ...: the one on seat0 (not ssh logins) */
+	while (f && fgets(line, sizeof(line), f))
+		if (sscanf(line, "%31s %u %63s %31s", id, &uid, user, seat) == 4 && uid >= 1000 &&
+		    !strcmp(seat, "seat0")) {
+			strcpy(lock_session, id);
+			strcpy(lock_user, user);
+			found = true;
+			break;
+		}
+	if (f)
+		pclose(f);
+	return found;
+}
+
+static bool session_locked(void)
+{
+	char cmd[128], buf[16] = "";
+	FILE *f;
+
+	snprintf(cmd, sizeof(cmd), "loginctl show-session %s -p LockedHint --value 2>/dev/null",
+		 lock_session);
+	f = popen(cmd, "r");
+	if (f) {
+		if (!fgets(buf, sizeof(buf), f))
+			buf[0] = 0;
+		pclose(f);
+	}
+	return !strncmp(buf, "yes", 3);
+}
+
+/* the display driver holds this wakelock while the panel is on */
+static bool display_on(void)
+{
+	FILE *f = fopen("/sys/kernel/debug/wakeup_sources", "r");
+	char line[256], name[64];
+	long v[5];
+	bool on = false;
+
+	while (f && fgets(line, sizeof(line), f))
+		if (sscanf(line, "%63s %ld %ld %ld %ld %ld", name, &v[0], &v[1], &v[2], &v[3],
+			   &v[4]) == 6 && !strcmp(name, "disp_crtc0_wakelock")) {
+			on = v[4] > 0;
+			break;
+		}
+	if (f)
+		fclose(f);
+	return on;
+}
+
+static void overlay(const char *action)
+{
+	char cmd[192];
+
+	snprintf(cmd, sizeof(cmd),
+		 "systemctl --user -M %s@ %s tetris-fp-overlay.service >/dev/null 2>&1",
+		 lock_user, action);
+	if (system(cmd))
+		fprintf(stderr, "tetris-fp: overlay %s failed\n", action);
+}
+
+static void unlockd(AIBinder *session)
+{
+	AIBinder *cancel = NULL;
+	bool spent = false;
+	int64_t op = 0;
+
+	for (;;) {
+		int ret, secs = 0;
+
+		if (!display_on())
+			spent = false;
+		if (spent || !find_session() || !session_locked() || !display_on()) {
+			usleep(500000);
+			continue;
+		}
+		overlay("start");
+		cancel = NULL;
+		if (call(session, S_AUTHENTICATE, "authenticate", w_i64, &op, r_binder, &cancel)) {
+			overlay("stop");
+			sleep(2);
+			continue;
+		}
+		set_cancel(cancel);
+		fod_mode(1);
+		/* scan until a match, an error, or the lock screen/display goes away; a finger
+		 * that doesn't match doesn't end the operation */
+		/* at most a minute per time the display is on: the touch controller is in
+		 * fingerprint mode meanwhile, and should something go wrong, touch is back
+		 * to normal soon */
+		do {
+			ret = wait_done(1);
+		} while ((ret == -ETIMEDOUT || ret == 1) && ++secs < 60 && session_locked() &&
+			 display_on());
+		if (secs >= 60)
+			spent = true;
+		if (ret == -ETIMEDOUT || ret == 1) {
+			call(g_cancel, 1, "cancel", NULL, NULL, NULL, NULL);
+			wait_done(2);           /* its onError(CANCELED) */
+		}
+		g_cancel = NULL;
+		fod_mode(0);
+		panel_feature("ui_status", 0);
+		panel_feature("hbm_mode", 0);
+		overlay("stop");
+		if (ret == 0) {
+			char cmd[96];
+
+			printf("match, unlocking session %s\n", lock_session);
+			snprintf(cmd, sizeof(cmd), "loginctl unlock-session %s", lock_session);
+			if (system(cmd))
+				fprintf(stderr, "tetris-fp: unlock failed\n");
+			/* until Phosh has followed */
+			for (int i = 0; i < 20 && session_locked(); i++)
+				usleep(100000);
+		} else if (ret < 0 && ret != -ETIMEDOUT) {
+			/* lockout or another error: don't spin */
+			sleep(2);
+		}
+	}
+}
+
 /* --- main ------------------------------------------------------------------------- */
 
 #define SYM(field, name) do { \
@@ -719,8 +913,8 @@ int main(int argc, char **argv)
 	void *lib;
 
 	if (strcmp(cmd, "enroll") && strcmp(cmd, "verify") && strcmp(cmd, "list") &&
-	    strcmp(cmd, "clear") && strcmp(cmd, "props")) {
-		fprintf(stderr, "usage: tetris-fp enroll|verify|list|clear|props\n");
+	    strcmp(cmd, "clear") && strcmp(cmd, "props") && strcmp(cmd, "unlockd")) {
+		fprintf(stderr, "usage: tetris-fp enroll|verify|list|clear|props|unlockd\n");
 		return 2;
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -758,7 +952,16 @@ int main(int argc, char **argv)
 	SYM(statusIsOk, "AStatus_isOk");
 	SYM(statusDescription, "AStatus_getDescription");
 	SYM(statusDelete, "AStatus_delete");
+	/* handle SIGTERM/SIGINT in one thread, after binder is up */
+	static sigset_t sigs;
+	pthread_t sig_th;
+
+	sigemptyset(&sigs);
+	sigaddset(&sigs, SIGTERM);
+	sigaddset(&sigs, SIGINT);
+	pthread_sigmask(SIG_BLOCK, &sigs, NULL);
 	b.startThreadPool();
+	pthread_create(&sig_th, NULL, signal_thread, &sigs);
 
 	fp = b.waitForService(FP_SERVICE);
 	if (!fp) {
@@ -793,6 +996,7 @@ int main(int argc, char **argv)
 	any_class = b.classDefine("android.hardware.biometrics.fingerprint.ISession",
 				  noop_create, noop_destroy, noop_transact);
 	b.associateClass(session, any_class);
+	g_session = session;
 	if (sensor.type == 2 || sensor.type == 3) {
 		static struct touch_args t;
 		pthread_t th;
@@ -802,7 +1006,9 @@ int main(int argc, char **argv)
 		pthread_create(&th, NULL, touch_thread, &t);
 	}
 
-	if (!strcmp(cmd, "list") || !strcmp(cmd, "clear")) {
+	if (!strcmp(cmd, "unlockd")) {
+		unlockd(session);
+	} else if (!strcmp(cmd, "list") || !strcmp(cmd, "clear")) {
 		if (call(session, S_ENUMERATE, "enumerateEnrollments", NULL, NULL, NULL, NULL))
 			goto out;
 		ret = wait_done(10) ? 1 : 0;
@@ -831,6 +1037,7 @@ int main(int argc, char **argv)
 		printf("put your finger on the sensor, lift it, repeat\n");
 		if (call(session, S_ENROLL, "enroll", w_hat, &hat, r_binder, &cancel))
 			goto out;
+		set_cancel(cancel);
 		ret = wait_done(120) ? 1 : 0;
 		call(session, S_REVOKE_CHALLENGE, "revokeChallenge", w_i64, &st.challenge, NULL,
 		     NULL);
@@ -840,10 +1047,14 @@ int main(int argc, char **argv)
 		printf("touch the sensor\n");
 		if (call(session, S_AUTHENTICATE, "authenticate", w_i64, &op, r_binder, &cancel))
 			goto out;
+		set_cancel(cancel);
 		ret = wait_done(30);
 		ret = ret == 0 ? 0 : ret == 1 ? 1 : 2;
 	}
 out:
-	call(session, S_CLOSE, "close", NULL, NULL, NULL, NULL);
+	/* after a result the operation is over: nothing to cancel */
+	if (st_finished())
+		g_cancel = NULL;
+	cleanup();
 	return ret;
 }

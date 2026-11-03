@@ -32,7 +32,7 @@ used through [libhybris](https://github.com/libhybris/libhybris).
 | Calls | ❌ | Incoming calls don't ring: the modem falls back to 2G for the call but never reports it to Linux. Probably a MediaTek init command is missing. No VoLTE (needs MediaTek's IMS stack). Help welcome |
 | Standby (suspend) | ❌ | The SoC hangs in deep sleep. The screen can still turn off, but the CPU stays awake |
 | GPS | 🟡 | MediaTek GNSS HAL + `tetris-gnss` feed geoclue (receiver on only while an app asks). Satellites are found, a first fix not confirmed yet |
-| Fingerprint | ❌ | Not started (the phone has no NFC) |
+| Fingerprint | 🟡 | Under-display sensor works with `tetris-fp enroll` / `verify` (Goodix HAL + Trustonic TEE); unlocking Phosh with it not yet (touch issue). The phone has no NFC |
 
 ## How it is put together
 

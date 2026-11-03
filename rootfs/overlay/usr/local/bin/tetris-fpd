@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fingerprint unlock for Phosh, see tetris-fp unlockd. Only with a finger enrolled
+# (tetris-fp enroll): otherwise wait, without switching the touch controller around.
+until tetris-fp list 2>/dev/null | grep -q "enrolled: .*[^ 0]"; do
+    sleep 60
+done
+exec tetris-fp unlockd
