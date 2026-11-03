@@ -1,0 +1,2 @@
+# USB data role follows the cable (see tetris-usb-role)
+SUBSYSTEM=="typec", KERNEL=="port0-partner", ACTION=="add|remove", RUN+="/usr/local/bin/tetris-usb-role"

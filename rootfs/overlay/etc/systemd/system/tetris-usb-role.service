@@ -1,0 +1,10 @@
+[Unit]
+Description=USB data role from the cable state (none without a cable, saves power)
+After=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tetris-usb-role
+
+[Install]
+WantedBy=multi-user.target

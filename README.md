@@ -93,7 +93,9 @@ scripts/flash-debug-b.sh                    # our kernel + initramfs to slot b, 
 
 After the first boot the **screen stays black**. That is expected: Arch's stock
 wlroots lacks phoc's layer-shell patch, and Phosh exits. The second stage fixes this.
-The phone is reachable over USB at `172.16.42.1`. Give it internet (`sudo
+The phone is reachable over USB at `172.16.42.1`. Give the PC side a static
+`172.16.42.2/24`, e.g. `nmcli c add type ethernet con-name tetris-usb match.driver cdc_ncm
+ipv4.method manual ipv4.addresses 172.16.42.2/24 ipv6.method ignore`. Give it internet (`sudo
 scripts/host-nat.sh up` shares the PC's connection over USB) and run the second stage.
 It builds libhybris, wlroots and the ModemManager plugin on the phone and installs the
 Halium image:

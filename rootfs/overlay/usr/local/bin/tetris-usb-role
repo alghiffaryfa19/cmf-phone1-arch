@@ -1,0 +1,12 @@
+#!/bin/sh
+# USB data role from the cable: device (USB networking, ssh) while a Type-C partner is
+# connected, none otherwise. The initramfs forces "device" because mtu3 only connects
+# once some data role is set; left like that, the USB clocks (univpll) stay on without a
+# cable, which costs power and keeps the SoC from deeper idle states.
+# Called by 78-tetris-usb-role.rules on partner add/remove and once at boot.
+role=none
+[ -e /sys/class/typec/port0-partner ] && role=device
+for r in /sys/class/usb_role/*/role; do
+    [ -e "$r" ] && echo "$role" > "$r"
+done
+echo "tetris-usb-role: $role"
