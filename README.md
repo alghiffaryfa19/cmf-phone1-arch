@@ -208,8 +208,10 @@ with the desktop profile: `sudo PROFILE=desktop scripts/build-rootfs.sh`, then
 `setup-phone.sh` for the GPU.
 
 Then connect to `tetris.local:3389` (or `172.16.42.1` over USB, or the WLAN address)
-with user `alarm` and the RDP password, e.g. `xfreerdp3 /v:tetris.local /u:alarm
-/dynamic-resolution`. The session is the logged-in GNOME of `alarm`; the desktop keeps
+with user `alarm` and the RDP password. GNOME takes the resolution the client asks for:
+`scripts/desktop-rdp.sh` connects in 1920×1080 (H.264), `scripts/desktop-rdp.sh
+tetris.local /f` full screen over WLAN; with other clients set 1920×1080 (or full
+screen) in the connection settings. The session is the logged-in GNOME of `alarm`; the desktop keeps
 running when you disconnect. New RDP password: `tetris-rdp-setup` on the phone.
 Back: `sudo tetris-mode server` or `sudo tetris-mode phone`, then reboot.
 
