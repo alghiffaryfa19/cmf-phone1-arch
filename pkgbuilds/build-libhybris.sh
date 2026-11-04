@@ -7,7 +7,7 @@
 set -euxo pipefail
 SUDO() { echo "${SUDOPW:-alarm}" | sudo -S -p '' "$@"; }
 B=~/build/hybris; PREFIX=/opt/libhybris
-SUDO pacman -S --needed --noconfirm base-devel git autoconf automake libtool pkgconf wayland >/dev/null
+SUDO pacman -S --needed --noconfirm base-devel git autoconf automake libtool pkgconf wayland vulkan-headers >/dev/null
 mkdir -p $B && cd $B
 [ -d android-headers ] || git clone -b herrie/halium-16.0 https://github.com/Halium/android-headers
 git -C android-headers checkout -q ad5912eee8bb56968af63de46ba3b594510ead3f
@@ -26,4 +26,11 @@ CFLAGS="-O2 -DVK_ENABLE_BETA_EXTENSIONS" \
     --enable-arch=arm64 --with-default-hybris-ld-library-path=/vendor/lib64:/system/lib64:/odm/lib64
 make -j"$(nproc)"
 SUDO make install
+# The Vulkan wrapper (built when vulkan-headers is installed) must not sit next to libEGL:
+# GTK/phoc with LD_LIBRARY_PATH=/opt/libhybris/lib would pick it up and crash. Only
+# tetris-llama (llama.cpp on the Mali GPU) uses it.
+SUDO install -d /opt/tetris-hybris-vulkan/lib
+if compgen -G "$PREFIX/lib/libvulkan.so*" >/dev/null; then
+    SUDO sh -c "mv -f $PREFIX/lib/libvulkan.so* /opt/tetris-hybris-vulkan/lib/"
+fi
 ls $PREFIX/lib | head -30

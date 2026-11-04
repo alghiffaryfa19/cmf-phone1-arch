@@ -163,8 +163,16 @@ curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"
 - Images must be `linux/arm64`. For x86-only images, build arm64 ones yourself
   (`docker buildx build --platform linux/arm64`).
 - AI models run on the CPU (4 × Cortex-A78 + 4 × Cortex-A55). Models of 1–4 B
-  parameters in Q4 are practical; RAM decides the upper limit. Neither the Mali GPU nor the
-  MediaTek APU can be used from Linux containers.
+  parameters in Q4 are practical; RAM decides the upper limit. Pull models with
+  `tetris-ollama-pull <model>`: it pins them to 4 threads, ~20 % faster than Ollama's
+  default of 8 (the A55 cores hold the A78 ones back). qwen3:1.7b: ~12 tokens/s.
+- **GPU (experimental):** the vendor Mali driver works through libhybris for OpenCL 3.0
+  and Vulkan 1.3. llama.cpp's OpenCL backend only accepts Adreno/Intel, its Vulkan
+  backend is generic: `pkgbuilds/build-llama-vulkan.sh` (on the phone) builds it,
+  `tetris-llama llama-bench -m model.gguf -ngl 99` runs it (container must be up for
+  `/vendor`). The GPU is small (2 cores, 1 GHz), so don't expect miracles; token
+  generation is limited by memory bandwidth on both. The MediaTek APU (NPU) only works
+  with NeuroPilot-compiled models under Android, and its kernel drivers hang here.
 - The phone runs on the charger all the time: keep it cool and out of direct sun.
 - Back to the phone: `sudo tetris-mode phone && sudo reboot`.
 

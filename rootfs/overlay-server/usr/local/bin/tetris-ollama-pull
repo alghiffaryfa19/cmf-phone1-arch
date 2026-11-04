@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pull an Ollama model and pin it to 4 threads. Ollama starts one thread per core (8);
+# the four Cortex-A55 cores then hold back the four A78 ones: 4 threads generate ~20 %
+# faster (qwen3:1.7b: 12.4 vs 10.4 tok/s). There is no global setting for this.
+#   tetris-ollama-pull qwen3:1.7b
+set -eu
+m=${1:?usage: tetris-ollama-pull <model>}
+docker exec ollama ollama pull "$m"
+printf 'FROM %s\nPARAMETER num_thread 4\n' "$m" |
+    docker exec -i ollama sh -c 'cat > /tmp/Modelfile && ollama create "$1" -f /tmp/Modelfile && rm /tmp/Modelfile' sh "$m"

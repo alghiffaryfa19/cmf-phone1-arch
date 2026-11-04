@@ -1,0 +1,19 @@
+#!/bin/sh
+# llama.cpp on the Mali-G615 GPU: Vulkan through libhybris (vendor Mali driver).
+# Built by pkgbuilds/build-llama-vulkan.sh into /opt/llama.cpp.
+#   tetris-llama llama-bench -m model.gguf -ngl 99
+#   tetris-llama llama-server -m model.gguf -ngl 99 --host 0.0.0.0 --port 8081
+# -ngl 0 keeps everything on the CPU (comparison). The Halium container provides /vendor.
+set -eu
+if [ ! -e /vendor/lib64/hw/vulkan.mali.so ] && [ ! -e /vendor/lib64/egl/vulkan.mali.so ]; then
+    echo "tetris-llama: /vendor is not mapped, start the container: sudo systemctl start tetris-android" >&2
+    exit 1
+fi
+tool=${1:?usage: tetris-llama <llama-cli|llama-server|llama-bench|...> [args]}
+shift
+set -a; . /etc/tetris-android/hybris.env; set +a
+export LD_LIBRARY_PATH="/opt/tetris-hybris-vulkan/lib:$LD_LIBRARY_PATH"
+export HYBRIS_VULKANPLATFORM=null
+# libhybris needs static TLS: it can't be dlopen()ed later, so load it with the program
+export LD_PRELOAD=/opt/libhybris/lib/libhybris-common.so.1
+exec "/opt/llama.cpp/bin/$tool" "$@"
