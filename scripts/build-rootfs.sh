@@ -168,7 +168,7 @@ arch-chroot "$MNT" /bin/bash -euxo pipefail -c "
     # our GKI kernel has no Landlock yet, so pacman's download sandbox fails on the phone too
     grep -q '^DisableSandbox' /etc/pacman.conf || sed -i '/^\\[options\\]/a DisableSandbox' /etc/pacman.conf
     usermod -aG wheel,video,input,audio,network alarm
-    systemctl enable sshd NetworkManager ModemManager systemd-networkd tetris-phosh tetris-growfs tetris-wlan bluetooth tetris-boot-success tetris-bt-bridge tetris-modem tetris-cpuidle tetris-vibra tetris-torch tetris-sensors tetris-splash-stop tetris-usb-role
+    systemctl enable sshd NetworkManager ModemManager systemd-networkd tetris-phosh tetris-growfs tetris-wlan bluetooth tetris-boot-success tetris-bt-bridge tetris-modem tetris-cpuidle tetris-vibra tetris-torch tetris-sensors tetris-splash-stop tetris-usb-role tetris-gpu-clean-shutdown
     systemctl mask iio-sensor-proxy  # no IIO sensors here; tetris-sensors serves its D-Bus API
     systemctl --global enable sm.puri.Chatty-daemon  # SMS arrive while the Chats window is closed
     systemctl set-default graphical.target

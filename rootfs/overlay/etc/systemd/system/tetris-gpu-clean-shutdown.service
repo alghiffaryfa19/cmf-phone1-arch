@@ -1,0 +1,16 @@
+[Unit]
+Description=Clean shutdown is no GPU crash: clear the GPU Phosh crash-guard marker
+# tetris-phosh-select leaves /var/lib/tetris-android/gpu-attempt for the first 90 s of a
+# GPU session; a reboot in that time (e.g. "Als Server starten" right after boot) made
+# the next boot fall back to software Phosh. ExecStop only runs on an orderly stop, a
+# crash or reset keeps the marker. After= so it stops before the session goes down.
+After=tetris-phosh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/bin/rm -f /var/lib/tetris-android/gpu-attempt
+
+[Install]
+WantedBy=multi-user.target
