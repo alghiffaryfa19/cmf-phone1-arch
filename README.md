@@ -176,6 +176,36 @@ curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"
 - The phone runs on the charger all the time: keep it cool and out of direct sun.
 - Back to the phone: `sudo tetris-mode phone && sudo reboot`.
 
+## Desktop profile (branch `desktop`)
+
+The server profile plus a full GNOME desktop that you use over **RDP** from a PC, tablet
+or another phone (Remmina, FreeRDP, Windows' Remote Desktop, Microsoft's RDP apps). The
+panel stays off; GNOME runs as a headless session of `alarm` and renders on the CPU
+(llvmpipe), RDP streams it with H.264/RemoteFX.
+
+| | |
+|---|---|
+| Kernel | Everything from the server profile, plus a backport of `SO_PEERPIDFD` from Linux 6.5 (`patches/kernel/0001`). GNOME 49+ needs peer pidfds from dbus-broker: without them the GDM polkit rule for headless sessions and the remote-login handover fail ("D-Bus broker doesn't support pidfd") |
+| Session | `gnome-headless-session@alarm` (GDM starts it at boot, no display needed); `72-tetris-headless-seat.rules` takes the panel out of seat0 so GDM opens no login screen on it |
+| RDP | `gnome-remote-desktop` in headless mode in alarm's session, port 3389. Certificate and a random password are made on the first boot (`tetris-rdp-setup`, user unit); the password is in `~/.config/tetris-rdp-password` |
+| Memory | ~850 MB used after boot with GNOME, Docker and Ollama idle |
+
+### Setting it up
+
+```sh
+git switch desktop
+scripts/build-kernel.sh && scripts/build-debug-boot.sh
+scripts/flash-debug-b.sh            # phone in fastboot
+scripts/push-modules.sh             # modules for the new kernel (when coming from main)
+scripts/setup-desktop.sh            # server + desktop profile, prints the RDP password
+```
+
+Then connect to `tetris.local:3389` (or `172.16.42.1` over USB, or the WLAN address)
+with user `alarm` and the RDP password, e.g. `xfreerdp3 /v:tetris.local /u:alarm
+/dynamic-resolution`. The session is the logged-in GNOME of `alarm`; the desktop keeps
+running when you disconnect. New RDP password: `tetris-rdp-setup` on the phone.
+Back: `sudo tetris-mode server` or `sudo tetris-mode phone`, then reboot.
+
 ## Risks
 
 - **Never relock the bootloader** while a custom kernel is on the phone or AVB is off.

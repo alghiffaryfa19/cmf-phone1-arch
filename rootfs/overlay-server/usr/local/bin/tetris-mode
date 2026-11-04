@@ -1,8 +1,12 @@
 #!/bin/sh
-# Switch the phone between the server profile (headless: no Phosh, panel off, Docker,
-# Ollama in Docker, mDNS) and the normal phone profile. Takes effect on the next boot.
+# Switch the phone between its profiles. Takes effect on the next boot.
+#   server   headless: no Phosh, panel off, Docker, Ollama in Docker, mDNS
+#   desktop  server + a GNOME desktop over RDP (headless GNOME session of alarm,
+#            gnome-remote-desktop; needs the SO_PEERPIDFD kernel patch)
+#   phone    Phosh on the panel
 #
 #   tetris-mode server [--with-modem]   # --with-modem keeps mobile data (needs the Halium container)
+#   tetris-mode desktop [--with-modem]
 #   tetris-mode phone
 #   tetris-mode                         # show the current profile
 set -eu
@@ -12,44 +16,63 @@ set -eu
 PHONE="tetris-phosh tetris-sensors tetris-vibra tetris-torch tetris-gnss tetris-fp bluetooth tetris-bt-bridge"
 MODEM="ModemManager tetris-modem"
 SERVER="tetris-display-off docker avahi-daemon systemd-oomd tetris-ai"
+# gnome-headless-session@alarm: GNOME session without a display, started with GDM.
+# The system gnome-remote-desktop (RDP in front of GDM) stays off.
+DESKTOP="gdm gnome-headless-session@alarm"
+# 72-tetris-headless-seat.rules: takes the panel out of seat0 (no GDM login screen on it)
+SEATFLAG=/etc/tetris-headless-seat
 
-# Only units that are installed (gnss, fp ... come from setup-phone.sh)
-have() {
+# enable/disable only units that are installed (gnss, fp ... come from setup-phone.sh)
+units() {
     for u in "$@"; do
-        [ -n "$(systemctl list-unit-files --no-legend "$u.service" 2>/dev/null)" ] && printf '%s ' "$u"
+        t=$(echo "$u" | sed 's/@.*/@/')
+        [ -n "$(systemctl list-unit-files --no-legend "$t.service" 2>/dev/null)" ] && printf '%s ' "$u"
     done
     return 0
+}
+en() { u=$(units "$@"); [ -z "$u" ] || systemctl enable $u; }
+dis() { u=$(units "$@"); [ -z "$u" ] || systemctl disable $u; }
+
+headless() { # headless <--with-modem or empty>
+    if [ "${1:-}" = --with-modem ]; then en $MODEM; else dis $MODEM; fi
+    dis $PHONE
+    en $SERVER
 }
 
 case ${1:-} in
 server)
-    if [ "${2:-}" = --with-modem ]; then
-        # shellcheck disable=SC2046
-        systemctl enable $(have $MODEM)
-    else
-        # shellcheck disable=SC2046
-        systemctl disable $(have $MODEM)
-    fi
-    # shellcheck disable=SC2046
-    systemctl disable $(have $PHONE)
-    # shellcheck disable=SC2046
-    systemctl enable $(have $SERVER)
+    headless "${2:-}"
+    dis $DESKTOP
+    rm -f "$SEATFLAG"
     systemctl set-default multi-user.target
     echo "server profile from the next boot on"
     ;;
+desktop)
+    [ -n "$(units gdm)" ] && [ -x /usr/bin/grdctl ] ||
+        { echo "tetris-mode: gdm and gnome-remote-desktop are not installed" >&2; exit 1; }
+    headless "${2:-}"
+    dis gnome-remote-desktop
+    en $DESKTOP
+    # RDP certificate + password on alarm's first login (user unit, ConditionUser=alarm)
+    systemctl --global enable tetris-rdp-setup.service
+    touch "$SEATFLAG"
+    systemctl set-default graphical.target
+    echo "desktop profile (RDP) from the next boot on"
+    ;;
 phone)
-    # shellcheck disable=SC2046
-    systemctl disable $(have $SERVER)
-    # shellcheck disable=SC2046
-    systemctl enable $(have $PHONE $MODEM)
+    dis $SERVER $DESKTOP
+    rm -f "$SEATFLAG"
+    en $PHONE $MODEM
     systemctl set-default graphical.target
     echo "phone profile (Phosh) from the next boot on"
     ;;
 "")
-    if [ "$(systemctl get-default)" = multi-user.target ]; then echo server; else echo phone; fi
+    if [ -e "$SEATFLAG" ]; then echo desktop
+    elif [ "$(systemctl get-default)" = multi-user.target ]; then echo server
+    else echo phone; fi
     ;;
 *)
-    echo "usage: tetris-mode [server [--with-modem] | phone]" >&2
+    echo "usage: tetris-mode [server [--with-modem] | desktop [--with-modem] | phone]" >&2
     exit 1
     ;;
 esac

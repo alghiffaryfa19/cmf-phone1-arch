@@ -1,0 +1,65 @@
+From: bonbon08 <mail@jan-schmitt.eu>
+Subject: [PATCH] net: backport SO_PEERPIDFD (Linux 6.5, 7b26952a91cf)
+
+dbus-broker hands out peer pidfds only with SO_PEERPIDFD. Without it GNOME 49+
+remote login fails: gnome-remote-desktop handover ("D-Bus broker doesn't support
+pidfd") and the GDM polkit rule for headless sessions (subject.system_unit).
+pidfd_prepare() is already in this tree.
+---
+diff --git a/include/uapi/asm-generic/socket.h b/include/uapi/asm-generic/socket.h
+index 638230899..2727d2b45 100644
+--- a/include/uapi/asm-generic/socket.h
++++ b/include/uapi/asm-generic/socket.h
+@@ -132,6 +132,8 @@
+ 
+ #define SO_RCVMARK		75
+ 
++#define SO_PEERPIDFD		77
++
+ #if !defined(__KERNEL__)
+ 
+ #if __BITS_PER_LONG == 64 || (defined(__x86_64__) && defined(__ILP32__))
+diff --git a/net/core/sock.c b/net/core/sock.c
+index dfbf3670b..831c39e5f 100644
+--- a/net/core/sock.c
++++ b/net/core/sock.c
+@@ -1747,6 +1747,39 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
+ 		v.val = !!test_bit(SOCK_PASSCRED, &sock->flags);
+ 		break;
+ 
++	case SO_PEERPIDFD:
++	{
++		struct pid *peer_pid;
++		struct file *pidfd_file = NULL;
++		int pidfd;
++
++		if (len > sizeof(pidfd))
++			len = sizeof(pidfd);
++
++		spin_lock(&sk->sk_peer_lock);
++		peer_pid = get_pid(sk->sk_peer_pid);
++		spin_unlock(&sk->sk_peer_lock);
++
++		if (!peer_pid)
++			return -ENODATA;
++
++		pidfd = pidfd_prepare(peer_pid, 0, &pidfd_file);
++		put_pid(peer_pid);
++		if (pidfd < 0)
++			return pidfd;
++
++		if (copy_to_sockptr(optval, &pidfd, len) ||
++		    copy_to_sockptr(optlen, &len, sizeof(int))) {
++			put_unused_fd(pidfd);
++			fput(pidfd_file);
++
++			return -EFAULT;
++		}
++
++		fd_install(pidfd, pidfd_file);
++		return 0;
++	}
++
+ 	case SO_PEERCRED:
+ 	{
+ 		struct ucred peercred;

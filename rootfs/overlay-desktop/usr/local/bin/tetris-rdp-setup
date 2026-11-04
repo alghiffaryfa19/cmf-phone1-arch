@@ -1,0 +1,27 @@
+#!/bin/sh
+# Desktop profile, run as alarm: RDP for the headless GNOME session
+# (gnome-headless-session@alarm, started by GDM at boot). Creates a TLS certificate and the
+# RDP credentials, then enables gnome-remote-desktop in headless mode on port 3389.
+# Started once by tetris-rdp-setup.service (user unit); run it again to change the password:
+#   tetris-rdp-setup [rdp-user [rdp-password]]   (default: alarm + a random password)
+# The password is kept in ~/.config/tetris-rdp-password.
+set -eu
+U=${1:-alarm}
+PW=${2:-$(head -c 12 /dev/urandom | base64 | tr -d '/+=')}
+D=$HOME/.local/share/gnome-remote-desktop
+mkdir -p "$D" "$HOME/.config"
+if [ ! -f "$D/tls.crt" ]; then
+    openssl req -new -newkey rsa:3072 -days 3650 -nodes -x509 -subj "/CN=$(cat /etc/hostname)" \
+        -keyout "$D/tls.key" -out "$D/tls.crt" 2>/dev/null
+    chmod 600 "$D/tls.key"
+fi
+grdctl --headless rdp set-tls-cert "$D/tls.crt"
+grdctl --headless rdp set-tls-key "$D/tls.key"
+grdctl --headless rdp set-credentials "$U" "$PW"
+grdctl --headless rdp disable-view-only
+grdctl --headless rdp enable
+(umask 077; printf 'RDP %s.local:3389  user %s  password %s\n' "$(cat /etc/hostname)" "$U" "$PW" \
+    > "$HOME/.config/tetris-rdp-password")
+systemctl --user enable gnome-remote-desktop-headless.service
+systemctl --user restart gnome-remote-desktop-headless.service
+cat "$HOME/.config/tetris-rdp-password"

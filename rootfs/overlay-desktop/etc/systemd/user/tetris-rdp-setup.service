@@ -1,0 +1,11 @@
+[Unit]
+Description=Desktop profile: first-time RDP setup (certificate, credentials)
+ConditionUser=alarm
+ConditionPathExists=!%h/.config/tetris-rdp-password
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tetris-rdp-setup
+
+[Install]
+WantedBy=default.target

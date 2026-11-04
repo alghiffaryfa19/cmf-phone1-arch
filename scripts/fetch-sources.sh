@@ -26,5 +26,6 @@ apply() { # apply <tree> <patch-dir>
         fi
     done
 }
+apply "$S/kernel-6.1" "$P/kernel"
 apply "$S/kernel_device_modules-6.1" "$P/kernel_device_modules"
 apply "$S/vendor/mediatek/kernel_modules" "$P/kernel_modules"
