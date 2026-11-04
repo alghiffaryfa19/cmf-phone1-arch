@@ -1,0 +1,17 @@
+#!/bin/sh
+# Desktop profile (tetris-mode desktop): EGL through glvnd with libhybris (Mali GPU) as
+# the first vendor and Mesa as the second, for GNOME Shell and every app of the session.
+# glvnd asks the vendors in order per platform: surfaceless (mutter) and Wayland (apps)
+# go to libhybris, GBM (Xwayland's glamor) is refused by libhybris and goes to Mesa.
+# The libhybris entry under /run only exists while the Halium container's gralloc HAL is
+# up (tetris-android-start-hals); without it glvnd skips to Mesa.
+[ -e /etc/tetris-headless-seat ] || exit 0
+[ -e "$HOME/.config/tetris-no-gpu" ] && exit 0
+# libhybris-common has 4 KiB of initial-exec TLS; glvnd dlopen()s it, which only works
+# with a larger static TLS reserve than glibc's default 512 bytes
+echo GLIBC_TUNABLES=glibc.rtld.optional_static_tls=16384
+echo __EGL_VENDOR_LIBRARY_FILENAMES=/run/tetris-hybris/10_libhybris.json:/usr/share/glvnd/egl_vendor.d/50_mesa.json
+sed -n 's/^HYBRIS_LD_LIBRARY_PATH=/HYBRIS_LD_LIBRARY_PATH=/p' /etc/tetris-android/hybris.env
+# GTK 4: GL renderer (Vulkan would be lavapipe on the CPU)
+echo GSK_RENDERER=gl
+echo GDK_DISABLE=vulkan

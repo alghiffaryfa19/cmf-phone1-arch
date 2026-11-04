@@ -180,15 +180,17 @@ curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"
 
 The server profile plus a full GNOME desktop that you use over **RDP** from a PC, tablet
 or another phone (Remmina, FreeRDP, Windows' Remote Desktop, Microsoft's RDP apps). The
-panel stays off; GNOME runs as a headless session of `alarm` and renders on the CPU
-(llvmpipe), RDP streams it with H.264/RemoteFX.
+panel stays off; GNOME runs as a headless session of `alarm`, **renders on the Mali GPU**
+(libhybris), and RDP streams it with H.264/RemoteFX.
 
 | | |
 |---|---|
 | Kernel | Everything from the server profile, plus a backport of `SO_PEERPIDFD` from Linux 6.5 (`patches/kernel/0001`). GNOME 49+ needs peer pidfds from dbus-broker: without them the GDM polkit rule for headless sessions and the remote-login handover fail ("D-Bus broker doesn't support pidfd") |
 | Session | `gnome-headless-session@alarm` (GDM starts it at boot, no display needed); `72-tetris-headless-seat.rules` takes the panel out of seat0 so GDM opens no login screen on it |
 | RDP | `gnome-remote-desktop` in headless mode in alarm's session, port 3389. Certificate and a random password are made on the first boot (`tetris-rdp-setup`, user unit); the password is in `~/.config/tetris-rdp-password` |
-| Memory | ~850 MB used after boot with GNOME, Docker and Ollama idle |
+| GPU | libhybris is built a second time as a **glvnd EGL vendor** (`/opt/libhybris-glvnd`) and listed in front of Mesa for the session (`user-environment-generators/60-tetris-hybris-gl`). glvnd picks per EGL platform: mutter's surfaceless display and the apps' Wayland EGL go to the Mali driver (mutter then offers `android_wlegl` to clients), Xwayland's GBM goes to Mesa. Needs `patches/libhybris/0002` (surfaceless platform) and the TLS fix in `0001`, the Halium container (gralloc) and a larger glibc static TLS reserve (`GLIBC_TUNABLES`). Verified: GNOME Shell, GTK 4 apps and X11 GL apps (glxgears) on the Mali-G615 |
+| Fallback | Without the container, glvnd uses Mesa. A GPU shell that dies within 60 s switches the session to software for that boot (`tetris-gnome-shell`). Off for good: `touch ~/.config/tetris-no-gpu` |
+| Memory | ~850 MB used after boot with GNOME, Docker and Ollama idle (CPU rendering; the container adds its share with the GPU) |
 
 ### Setting it up
 
@@ -199,6 +201,11 @@ scripts/flash-debug-b.sh            # phone in fastboot
 scripts/push-modules.sh             # modules for the new kernel (when coming from main)
 scripts/setup-desktop.sh            # server + desktop profile, prints the RDP password
 ```
+
+For the GPU the Halium image must be installed (`scripts/setup-phone.sh`, as for GPU
+Phosh); `setup-desktop.sh` then rebuilds libhybris with its glvnd variant. A fresh image
+with the desktop profile: `sudo PROFILE=desktop scripts/build-rootfs.sh`, then
+`setup-phone.sh` for the GPU.
 
 Then connect to `tetris.local:3389` (or `172.16.42.1` over USB, or the WLAN address)
 with user `alarm` and the RDP password, e.g. `xfreerdp3 /v:tetris.local /u:alarm

@@ -11,24 +11,29 @@ index 0051d37..3986f8c 100644
  		);
  		ret = eglextensionsbuf;
  		return ret;
-@@ -614,10 +614,34 @@ static int compare_search(const void * key, const void * item)
+@@ -614,10 +614,39 @@ static int compare_search(const void * key, const void * item)
  	return strcmp(key, f_item->name);
  }
  
 +/* EGL_EXT_device_query stubs: no EGL device information on libhybris. GTK 4.24
-+ * calls eglQueryDisplayAttribEXT unconditionally; without a provider libepoxy aborts. */
++ * calls eglQueryDisplayAttribEXT unconditionally; without a provider libepoxy aborts.
++ * They must set an EGL error: mutter turns eglGetError() into a GError and crashes on
++ * a NULL one when the call failed with EGL_SUCCESS. */
 +static EGLBoolean hybris_eglQueryDisplayAttribEXT(EGLDisplay dpy, EGLint attribute, EGLAttrib *value)
 +{
++	__eglHybrisSetError(EGL_BAD_ATTRIBUTE);
 +	return EGL_FALSE;
 +}
 +
 +static EGLBoolean hybris_eglQueryDeviceAttribEXT(void *device, EGLint attribute, EGLAttrib *value)
 +{
++	__eglHybrisSetError(EGL_BAD_ATTRIBUTE);
 +	return EGL_FALSE;
 +}
 +
 +static const char *hybris_eglQueryDeviceStringEXT(void *device, EGLint name)
 +{
++	__eglHybrisSetError(EGL_BAD_PARAMETER);
 +	return NULL;
 +}
 +

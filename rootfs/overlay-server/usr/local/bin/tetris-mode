@@ -17,8 +17,9 @@ PHONE="tetris-phosh tetris-sensors tetris-vibra tetris-torch tetris-gnss tetris-
 MODEM="ModemManager tetris-modem"
 SERVER="tetris-display-off docker avahi-daemon systemd-oomd tetris-ai"
 # gnome-headless-session@alarm: GNOME session without a display, started with GDM.
+# tetris-android: its gralloc HAL lets GNOME Shell and the apps render on the Mali GPU.
 # The system gnome-remote-desktop (RDP in front of GDM) stays off.
-DESKTOP="gdm gnome-headless-session@alarm"
+DESKTOP="gdm gnome-headless-session@alarm tetris-android"
 # 72-tetris-headless-seat.rules: takes the panel out of seat0 (no GDM login screen on it)
 SEATFLAG=/etc/tetris-headless-seat
 

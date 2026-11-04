@@ -3,6 +3,7 @@
 #   sudo scripts/build-rootfs.sh
 #   sudo scripts/build-rootfs.sh --finish   # re-apply overlay/services + shrink on an existing image
 #   sudo PROFILE=server scripts/build-rootfs.sh   # headless server: Docker, Ollama, no Phosh
+#   sudo PROFILE=desktop scripts/build-rootfs.sh  # server + GNOME over RDP
 # Output: out/rootfs.img (raw ext4) + out/rootfs.simg (sparse, for `fastboot flash userdata`).
 # The image is small; the phone grows it to the full userdata partition on first boot.
 set -euo pipefail
@@ -19,7 +20,8 @@ STRIP=$P/toolchain/clang-r487747c/bin/llvm-strip
 OWNER=$(stat -c %u:%g "$P")
 SIZE=${SIZE:-10G}
 PROFILE=${PROFILE:-phone}
-[[ $PROFILE == phone || $PROFILE == server ]] || { echo "PROFILE must be phone or server"; exit 1; }
+[[ $PROFILE == phone || $PROFILE == server || $PROFILE == desktop ]] ||
+    { echo "PROFILE must be phone, server or desktop"; exit 1; }
 
 PACKAGES=(
     # UI
@@ -39,7 +41,11 @@ PACKAGES=(
 # Arch Linux ARM has no ollama package. The phone packages stay installed so that
 # `tetris-mode phone` can switch back.
 SERVER_PACKAGES=(docker docker-compose docker-buildx avahi nss-mdns zram-generator)
-[[ $PROFILE == server ]] && PACKAGES+=("${SERVER_PACKAGES[@]}")
+# Desktop profile (rootfs/overlay-desktop): headless GNOME session behind RDP
+DESKTOP_PACKAGES=(gdm gnome-session gnome-remote-desktop xdg-desktop-portal-gnome gnome-backgrounds
+    gnome-console nautilus gnome-text-editor gnome-system-monitor)
+[[ $PROFILE != phone ]] && PACKAGES+=("${SERVER_PACKAGES[@]}")
+[[ $PROFILE == desktop ]] && PACKAGES+=("${DESKTOP_PACKAGES[@]}")
 
 cleanup() {
     mountpoint -q "$MNT" && umount -R "$MNT" || true
@@ -78,12 +84,14 @@ fi
 
 echo "== overlay"
 cp -a "$P/rootfs/overlay/." "$MNT/"
-[[ $PROFILE == server ]] && cp -a "$P/rootfs/overlay-server/." "$MNT/"
+[[ $PROFILE != phone ]] && cp -a "$P/rootfs/overlay-server/." "$MNT/"
+[[ $PROFILE == desktop ]] && cp -a "$P/rootfs/overlay-desktop/." "$MNT/"
 # stock vendor firmware (scripts/extract-vendor.sh), see firmware_class.path=/vendor/firmware
 mkdir -p "$MNT/vendor"; rm -rf "$MNT/vendor/firmware"
 cp -a "$OUT/vendor-extract/vendor/firmware" "$MNT/vendor/"; chown -R 0:0 "$MNT/vendor"
-chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d"
-if [[ $PROFILE == server ]]; then
+chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d" \
+    "$MNT/etc/udev/rules.d" "$MNT/usr/local/bin"
+if [[ $PROFILE != phone ]]; then
     chown -R 0:0 "$MNT/etc/ssh/sshd_config.d" "$MNT/etc/docker" "$MNT/etc/sysctl.d" "$MNT/usr/local/bin/tetris-mode" "$MNT/opt/tetris-server"
 fi
 chmod 0440 "$MNT/etc/sudoers.d/10-wheel"
@@ -161,9 +169,9 @@ arch-chroot "$MNT" /bin/bash -euxo pipefail -c "
     systemctl mask iio-sensor-proxy  # no IIO sensors here; tetris-sensors serves its D-Bus API
     systemctl --global enable sm.puri.Chatty-daemon  # SMS arrive while the Chats window is closed
     systemctl set-default graphical.target
-    if [[ $PROFILE == server ]]; then
+    if [[ $PROFILE != phone ]]; then
         usermod -aG docker alarm
-        /usr/local/bin/tetris-mode server
+        /usr/local/bin/tetris-mode $PROFILE
     fi
     rm -rf /var/cache/pacman/pkg/*
     rm -rf /etc/systemd/system/phosh.service.d  # leftover from an earlier overlay

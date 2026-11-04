@@ -1,0 +1,26 @@
+--- a/hybris/egl/egl.c	2026-11-04 14:46:06.741382979 +0000
++++ b/hybris/egl/egl.c	2026-11-04 14:46:06.781381050 +0000
+@@ -235,6 +235,14 @@
+ 			hybris_ws = "null";
+ 			break;
+ 
++		case EGL_PLATFORM_SURFACELESS_MESA:
++			// No window system: what the Android driver does anyway without a
++			// native window (offscreen FBOs, pbuffers). mutter asks for this in
++			// headless mode (GNOME remote desktop sessions). Not EGL_PLATFORM:
++			// that is set to wayland for the compositor's clients.
++			hybris_ws = "null";
++			break;
++
+ #ifdef WANT_WAYLAND
+ 		case EGL_PLATFORM_WAYLAND_KHR:
+ 			hybris_ws = "wayland";
+@@ -317,7 +324,7 @@
+ 		const char *ret = _eglQueryString(dpy, name);
+ 		static char eglextensionsbuf[2048];
+ 		snprintf(eglextensionsbuf, 2046, "%s %s", ret,
+-			"EGL_EXT_client_extensions EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_device_query"
++			"EGL_EXT_client_extensions EGL_EXT_platform_base EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_MESA_platform_surfaceless EGL_EXT_device_query"
+ 		);
+ 		ret = eglextensionsbuf;
+ 		return ret;

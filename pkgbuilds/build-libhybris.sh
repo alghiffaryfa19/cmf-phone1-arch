@@ -7,7 +7,7 @@
 set -euxo pipefail
 SUDO() { echo "${SUDOPW:-alarm}" | sudo -S -p '' "$@"; }
 B=~/build/hybris; PREFIX=/opt/libhybris
-SUDO pacman -S --needed --noconfirm base-devel git autoconf automake libtool pkgconf wayland vulkan-headers >/dev/null
+SUDO pacman -S --needed --noconfirm base-devel git autoconf automake libtool pkgconf wayland vulkan-headers libglvnd >/dev/null
 mkdir -p $B && cd $B
 [ -d android-headers ] || git clone -b herrie/halium-16.0 https://github.com/Halium/android-headers
 git -C android-headers checkout -q ad5912eee8bb56968af63de46ba3b594510ead3f
@@ -34,3 +34,19 @@ if compgen -G "$PREFIX/lib/libvulkan.so*" >/dev/null; then
     SUDO sh -c "mv -f $PREFIX/lib/libvulkan.so* /opt/tetris-hybris-vulkan/lib/"
 fi
 ls $PREFIX/lib | head -30
+
+# Second build as a glvnd EGL vendor (libEGL_libhybris.so.0) for the desktop profile:
+# glvnd puts it in front of Mesa (user-environment-generators/60-tetris-hybris-gl), so
+# GNOME Shell (EGL surfaceless) and apps (EGL Wayland) get the Mali GPU while Xwayland's
+# GBM requests still go to Mesa. Same sources and patches, own prefix.
+GPREFIX=/opt/libhybris-glvnd
+cd $B && rm -rf libhybris-glvnd && cp -a libhybris libhybris-glvnd
+cd libhybris-glvnd/hybris
+make distclean >/dev/null 2>&1 || true
+CFLAGS="-O2 -DVK_ENABLE_BETA_EXTENSIONS" \
+./configure --prefix=$GPREFIX --with-android-headers=$B/android-headers --enable-mali-quirks --enable-wayland \
+    --enable-glvnd --enable-arch=arm64 --with-default-hybris-ld-library-path=/vendor/lib64:/system/lib64:/odm/lib64
+make -j"$(nproc)"
+SUDO make install
+SUDO sh -c "rm -f $GPREFIX/lib/libvulkan.*"
+ls $GPREFIX/lib/libEGL_libhybris.so.0

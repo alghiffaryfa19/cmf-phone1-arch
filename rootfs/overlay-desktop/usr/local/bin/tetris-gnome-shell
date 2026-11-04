@@ -1,0 +1,41 @@
+#!/bin/sh
+# Desktop profile: GNOME Shell (mutter, headless) composites on the Mali GPU through
+# libhybris instead of Mesa llvmpipe. The EGL vendor choice is made by glvnd
+# (user-environment-generators/60-tetris-hybris-gl); this wrapper waits for the Halium
+# container (its gralloc HAL) and guards against a crashing GPU shell.
+#
+# Crash guard like tetris-phosh-select: a marker exists while a GPU shell is younger than
+# 60 s; if the shell starts again while it is there, the GPU shell died early, and the
+# shell and its apps run on Mesa llvmpipe for the rest of this boot.
+# No GPU at all: touch ~/.config/tetris-no-gpu
+M=$HOME/.cache/tetris-gpu-shell-attempt
+F=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/tetris-gpu-shell-off
+MESA=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+why=
+mkdir -p "$HOME/.cache"
+case ${__EGL_VENDOR_LIBRARY_FILENAMES:-} in
+*tetris-hybris*) ;;
+*) exec /usr/bin/gnome-shell "$@" ;;   # not the desktop profile, or GPU disabled
+esac
+if [ -e "$F" ]; then
+    why="GPU shell crashed earlier in this boot"
+elif [ -e "$M" ]; then
+    rm -f "$M"; touch "$F"
+    why="GPU shell died within 60 s"
+else
+    # The container comes up in parallel with GDM; its gralloc HAL must be registered
+    for _ in $(seq 90); do
+        [ -e /run/tetris-hybris/10_libhybris.json ] && break
+        sleep 1
+    done
+    [ -e /run/tetris-hybris/10_libhybris.json ] || why="Halium container / gralloc not up"
+fi
+if [ -n "$why" ]; then
+    echo "tetris-gnome-shell: $why -> software rendering"
+    export __EGL_VENDOR_LIBRARY_FILENAMES=$MESA
+    exec /usr/bin/gnome-shell "$@"
+fi
+touch "$M"
+systemd-run --user --quiet --on-active=60 --unit="tetris-gpu-shell-ok-$$" rm -f "$M"
+echo "tetris-gnome-shell: Mali GPU via libhybris (glvnd)"
+exec /usr/bin/gnome-shell "$@"

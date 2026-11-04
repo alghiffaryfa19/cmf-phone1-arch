@@ -10,6 +10,9 @@ HALS="vendor.gralloc-v2 vender.mediatek.hardware.pq_aidl-default vendor.mtkpower
 # (not after a failed GPU start: tetris-phosh-select falls back to software then)
 GPU=
 [ -e /etc/tetris-android/gpu-shell ] && [ ! -e /var/lib/tetris-android/gpu-attempt ] && GPU=1
+# Server/desktop profiles (tetris-mode): no Phosh, tetris-display-off holds DRM master and the
+# composer would spin on drmSetMaster at RT priority (watchdog reset). Never start it then.
+systemctl -q is-enabled tetris-phosh 2>/dev/null || GPU=
 [ -n "$GPU" ] && HALS="$HALS vendor.hwcomposer-3-2"
 A="lxc-attach -n android --"
 for i in $(seq 60); do
@@ -28,6 +31,12 @@ wait_for() {
     return 1
 }
 wait_for android.hardware.graphics.allocator.IAllocator/default || exit 1
+# Desktop profile: glvnd may load libhybris now (user-environment-generators/60-tetris-hybris-gl)
+if [ -e /etc/tetris-headless-seat ] && [ -e /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 ]; then
+    mkdir -p /run/tetris-hybris
+    printf '{ "file_format_version": "1.0.0", "ICD": { "library_path": "%s" } }\n' \
+        /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 > /run/tetris-hybris/10_libhybris.json
+fi
 if [ -n "$GPU" ]; then
     wait_for android.hardware.graphics.composer3.IComposer/default || exit 1
 fi
