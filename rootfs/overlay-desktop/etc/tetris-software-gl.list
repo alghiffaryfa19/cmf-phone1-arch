@@ -1,0 +1,4 @@
+# Desktop profile: apps that run on Mesa (CPU) instead of the Mali GPU, because they
+# crash on libhybris EGL. Desktop file names without .desktop; apply with
+# sudo tetris-software-gl-desktop-files
+firefox

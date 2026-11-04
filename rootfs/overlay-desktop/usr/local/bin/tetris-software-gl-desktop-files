@@ -1,0 +1,15 @@
+#!/bin/sh
+# Desktop entries of the apps in /etc/tetris-software-gl.list, rewritten to start through
+# tetris-software-gl (copies in /usr/local/share/applications, which win over
+# /usr/share/applications). Run by a pacman hook when those packages change.
+set -eu
+L=/usr/local/share/applications
+mkdir -p "$L"
+grep -vE '^\s*(#|$)' /etc/tetris-software-gl.list | while read -r app; do
+    src=/usr/share/applications/$app.desktop
+    if [ -f "$src" ]; then
+        sed -E 's|^(Exec=)(env [^ ]+ )?|\1/usr/local/bin/tetris-software-gl |' "$src" > "$L/$app.desktop"
+    else
+        rm -f "$L/$app.desktop"
+    fi
+done

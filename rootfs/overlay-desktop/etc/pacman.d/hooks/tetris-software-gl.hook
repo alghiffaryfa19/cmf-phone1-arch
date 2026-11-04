@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/share/applications/*.desktop
+
+[Action]
+Description = Desktop entries for apps that run on Mesa instead of the Mali GPU...
+When = PostTransaction
+Exec = /usr/local/bin/tetris-software-gl-desktop-files

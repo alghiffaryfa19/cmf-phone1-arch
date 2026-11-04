@@ -91,6 +91,9 @@ mkdir -p "$MNT/vendor"; rm -rf "$MNT/vendor/firmware"
 cp -a "$OUT/vendor-extract/vendor/firmware" "$MNT/vendor/"; chown -R 0:0 "$MNT/vendor"
 chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d" \
     "$MNT/etc/udev/rules.d" "$MNT/usr/local/bin"
+if [[ $PROFILE == desktop ]]; then
+    chown -R 0:0 "$MNT/etc/pacman.d/hooks" "$MNT/etc/tetris-software-gl.list"
+fi
 if [[ $PROFILE != phone ]]; then
     chown -R 0:0 "$MNT/etc/ssh/sshd_config.d" "$MNT/etc/docker" "$MNT/etc/sysctl.d" "$MNT/usr/local/bin/tetris-mode" "$MNT/opt/tetris-server"
 fi

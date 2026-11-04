@@ -1,0 +1,3 @@
+#!/bin/sh
+# Firefox crashes on libhybris EGL (see tetris-software-gl); it uses Mesa
+exec /usr/local/bin/tetris-software-gl /usr/lib/firefox/firefox "$@"

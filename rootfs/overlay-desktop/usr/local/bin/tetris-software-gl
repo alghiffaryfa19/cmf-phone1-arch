@@ -1,0 +1,7 @@
+#!/bin/sh
+# Desktop profile: run a program with Mesa (llvmpipe) instead of the Mali GPU through
+# libhybris, for apps that crash on libhybris EGL (Firefox: WebRender's renderer thread
+# dies inside libGLES_mali). The rest of the session stays on the GPU.
+#   tetris-software-gl <program> [args]
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+exec "$@"
