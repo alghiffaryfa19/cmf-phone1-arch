@@ -119,7 +119,7 @@ the server and the phone profile; both stay installed.
 | Kernel | Docker options on top of the phone config (`kernel/linux.config`, "Server profile"): nftables + iptables compat, `br_netfilter`, `xt_addrtype`, IPv6 NAT, CFS bandwidth (`--cpus`), IPVS, VXLAN/IPVLAN |
 | Display | `tetris-display-off` switches the panel off (DRM DPMS) and holds DRM master |
 | Network | USB: `172.16.42.1` (as before). WLAN: NetworkManager, power save **off** (it delays incoming connections by a beacon interval). mDNS name `tetris.local` (Avahi) |
-| SSH | Keys only (`etc/ssh/sshd_config.d/50-tetris-server.conf`): the project key and the PC user's keys are installed |
+| SSH | Keys only over WLAN, password too over the USB cable (`etc/ssh/sshd_config.d/50-tetris-server.conf`). The project key and the PC user's keys are installed |
 | Docker | `overlay2` on the ext4 rootfs, logs capped at 3 × 10 MB per container, `live-restore`. `alarm` is in the `docker` group |
 | AI | Ollama as a container (`/opt/tetris-server/ai/compose.yaml`, `tetris-ai.service`), API on port 11434, CPU only. Optional web chat (Open WebUI, port 3000) |
 | Memory | zram swap (half the RAM, zstd), `systemd-oomd`. The Halium container stays off (frees its RAM) unless you keep the modem |
