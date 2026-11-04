@@ -34,10 +34,15 @@ units() {
 en() { u=$(units "$@"); [ -z "$u" ] || systemctl enable $u; }
 dis() { u=$(units "$@"); [ -z "$u" ] || systemctl disable $u; }
 
+# WLAN power save off without the phone UI: it delays incoming connections by a beacon.
+# NetworkManager merges conf.d files sorted by name: must come after wifi-powersave.conf
+NMCONF=/etc/NetworkManager/conf.d/zz-tetris-headless.conf
+
 headless() { # headless <--with-modem or empty>
     if [ "${1:-}" = --with-modem ]; then en $MODEM; else dis $MODEM; fi
     dis $PHONE
     en $SERVER
+    printf '[connection]\nwifi.powersave = 2\n' > "$NMCONF"
 }
 
 case ${1:-} in
@@ -62,14 +67,16 @@ desktop)
     ;;
 phone)
     dis $SERVER $DESKTOP
-    rm -f "$SEATFLAG"
+    rm -f "$SEATFLAG" "$NMCONF"
     en $PHONE $MODEM
     systemctl set-default graphical.target
     echo "phone profile (Phosh) from the next boot on"
     ;;
 "")
+    [ -e /run/tetris-mode/once ] && echo "this boot: $(cat /run/tetris-mode/once) (once, then the profile below)"
+    # /etc, not systemctl get-default: a one-boot profile overrides that under /run
     if [ -e "$SEATFLAG" ]; then echo desktop
-    elif [ "$(systemctl get-default)" = multi-user.target ]; then echo server
+    elif [ "$(readlink /etc/systemd/system/default.target)" = /usr/lib/systemd/system/multi-user.target ]; then echo server
     else echo phone; fi
     ;;
 *)

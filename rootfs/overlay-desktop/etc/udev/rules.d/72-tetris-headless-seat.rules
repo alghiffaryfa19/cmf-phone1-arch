@@ -2,3 +2,5 @@
 # login screen on it; the desktop is the headless GNOME session behind RDP. The panel
 # stays off (tetris-display-off). After 71-seat.rules, which adds these tags.
 SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TEST=="/etc/tetris-headless-seat", TAG-="seat", TAG-="master-of-seat", TAG-="uaccess"
+# one boot as desktop (system-generators/tetris-mode-once)
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TEST=="/run/tetris-headless-seat", TAG-="seat", TAG-="master-of-seat", TAG-="uaccess"

@@ -26,7 +26,7 @@ PROFILE=${PROFILE:-phone}
 PACKAGES=(
     # UI
     phosh phoc squeekboard phosh-mobile-settings gnome-console gnome-control-center
-    gnome-text-editor nautilus adwaita-icon-theme cantarell-fonts noto-fonts noto-fonts-emoji
+    gnome-text-editor nautilus adwaita-icon-theme cantarell-fonts noto-fonts noto-fonts-emoji zenity
     # system
     networkmanager modemmanager chatty gnome-calls gnome-maps wpa_supplicant iw feedbackd gnome-keyring bluez bluez-utils
     openssh sudo vim htop bash-completion usbutils pciutils e2fsprogs
@@ -90,7 +90,7 @@ cp -a "$P/rootfs/overlay/." "$MNT/"
 mkdir -p "$MNT/vendor"; rm -rf "$MNT/vendor/firmware"
 cp -a "$OUT/vendor-extract/vendor/firmware" "$MNT/vendor/"; chown -R 0:0 "$MNT/vendor"
 chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d" \
-    "$MNT/etc/udev/rules.d" "$MNT/usr/local/bin"
+    "$MNT/etc/udev/rules.d" "$MNT/usr/local/bin" "$MNT/etc/polkit-1/rules.d" "$MNT/usr/lib/NetworkManager/conf.d"
 if [[ $PROFILE == desktop ]]; then
     chown -R 0:0 "$MNT/etc/pacman.d/hooks" "$MNT/etc/tetris-software-gl.list"
 fi

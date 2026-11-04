@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Als Server starten
+Comment=Einmal als Server neu starten (Docker, KI, SSH); danach wieder Telefon
+Exec=tetris-boot-as server
+Icon=network-server
+Categories=System;
+OnlyShowIn=Phosh;
+X-Purism-FormFactor=Workstation;Mobile;

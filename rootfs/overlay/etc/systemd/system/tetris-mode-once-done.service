@@ -1,0 +1,8 @@
+[Unit]
+Description=One-boot server/desktop profile: back to the phone on the next boot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+# The generator (system-generators/tetris-mode-once) has already set up this boot
+ExecStart=/usr/bin/rm -f /var/lib/tetris-mode/once

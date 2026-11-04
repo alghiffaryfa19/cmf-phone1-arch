@@ -5,7 +5,7 @@
 # go to libhybris, GBM (Xwayland's glamor) is refused by libhybris and goes to Mesa.
 # The libhybris entry under /run only exists while the Halium container's gralloc HAL is
 # up (tetris-android-start-hals); without it glvnd skips to Mesa.
-[ -e /etc/tetris-headless-seat ] || exit 0
+[ -e /etc/tetris-headless-seat ] || [ -e /run/tetris-headless-seat ] || exit 0
 [ -e "$HOME/.config/tetris-no-gpu" ] && exit 0
 # libhybris-common has 4 KiB of initial-exec TLS; glvnd dlopen()s it, which only works
 # with a larger static TLS reserve than glibc's default 512 bytes

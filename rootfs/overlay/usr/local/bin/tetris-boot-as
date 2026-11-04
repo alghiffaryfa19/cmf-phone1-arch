@@ -1,0 +1,37 @@
+#!/bin/sh
+# Phosh apps "Als Server starten" / "Als Desktop starten": reboot once into the server or
+# desktop profile; the boot after that is the phone again (system-generators/tetris-mode-once).
+#   tetris-boot-as server|desktop
+mode=${1:?usage: tetris-boot-as server|desktop}
+export GSK_RENDERER=cairo   # zenity (GTK 4) in software, like the other dialogs of ours
+z() { zenity --width=360 "$@"; }
+
+missing=
+[ -x /usr/bin/docker ] && [ -x /usr/local/bin/tetris-display-off ] || missing=scripts/setup-server.sh
+if [ "$mode" = desktop ] && [ -z "$missing" ]; then
+    [ -x /usr/bin/gdm ] && [ -x /usr/local/bin/tetris-rdp-setup ] && [ -e /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 ] ||
+        missing=scripts/setup-desktop.sh
+fi
+if [ -n "$missing" ]; then
+    z --error --title="Nicht eingerichtet" \
+        --text="Der $mode-Modus ist auf diesem Handy noch nicht installiert. Auf dem PC: $missing"
+    exit 1
+fi
+
+addr() { ip -4 -o addr show "$1" 2>/dev/null | awk '{sub("/.*", "", $4); print $4; exit}'; }
+wlan=$(addr wlan0); usb=$(addr usb0)
+host=${wlan:-${usb:-172.16.42.1}}
+text="Das Handy startet neu als $( [ "$mode" = server ] && echo Server || echo Desktop ), nur für diesen einen Start. Das Display bleibt aus.
+
+Erreichbar: WLAN ${wlan:-nicht verbunden}, USB-Kabel ${usb:-172.16.42.1}
+SSH: ssh alarm@$host"
+if [ "$mode" = desktop ]; then
+    pw=$(awk '{print $NF}' "$HOME/.config/tetris-rdp-password" 2>/dev/null)
+    text="$text
+RDP: $host:3389, Benutzer alarm, Passwort ${pw:-wird beim Start erzeugt (~/.config/tetris-rdp-password)}"
+fi
+text="$text
+
+Zurück zum Telefon: Ein-/Aus-Taste kurz drücken (oder sonst neu starten)."
+z --question --title="Neu starten?" --text="$text" --ok-label="Neu starten" --cancel-label="Abbrechen" || exit 0
+systemctl start --no-block "tetris-boot-once@$mode.service"

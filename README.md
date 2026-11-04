@@ -108,29 +108,45 @@ scripts/setup-phone.sh /path/to/halium/system.img
 
 The user is `alarm` with password `alarm`. **Change it** (`passwd`), because SSH is on.
 
-## Server profile (branch `server`)
+## Server and desktop profiles
+
+Besides the phone (Phosh) the phone can boot as a **server** (headless: Docker, local
+AI models, SSH) or as a **desktop** (GNOME over RDP, on the GPU). Two ways to switch:
+
+- **One boot only:** the Phosh apps **Als Server starten** / **Als Desktop starten**
+  (`tetris-boot-as`) show where the phone will be reachable (SSH, RDP with password) and
+  reboot into that profile. The boot after that is the phone again: a short press on the
+  power key reboots back. Under the hood `/var/lib/tetris-mode/once` is read by a systemd
+  generator (`system-generators/tetris-mode-once`) that sets up the profile under `/run`
+  only (runtime masks of the phone services, default target, WLAN power save off, power
+  key = reboot); `tetris-mode-once-done.service` deletes the file during that boot.
+- **For good:** `sudo tetris-mode server|desktop|phone` (`--with-modem` keeps mobile
+  data), then reboot.
+
+Both need the profile installed once (`scripts/setup-server.sh`, `scripts/setup-desktop.sh`,
+see below); the apps say so otherwise.
+
+### Server profile
 
 The phone as a small always-on server: no Phosh, panel off, reachable over USB and WLAN,
-runs Docker containers and local AI models (Ollama). `tetris-mode` switches between
-the server and the phone profile; both stay installed.
+runs Docker containers and local AI models (Ollama).
 
 | | |
 |---|---|
 | Kernel | Docker options on top of the phone config (`kernel/linux.config`, "Server profile"): nftables + iptables compat, `br_netfilter`, `xt_addrtype`, IPv6 NAT, CFS bandwidth (`--cpus`), IPVS, VXLAN/IPVLAN |
 | Display | `tetris-display-off` switches the panel off (DRM DPMS) and holds DRM master |
-| Network | USB: `172.16.42.1` (as before). WLAN: NetworkManager, power save **off** (it delays incoming connections by a beacon interval). mDNS name `tetris.local` (Avahi) |
+| Network | USB: `172.16.42.1` (as before). WLAN: NetworkManager, power save **off** (it delays incoming connections by a beacon interval; the phone's default "on" lives in `/usr/lib/NetworkManager/conf.d` so `/run` and `/etc` can override it). mDNS name `tetris.local` (Avahi) |
 | SSH | Keys only over WLAN, password too over the USB cable (`etc/ssh/sshd_config.d/50-tetris-server.conf`). The project key and the PC user's keys are installed |
 | Docker | `overlay2` on the ext4 rootfs, logs capped at 3 × 10 MB per container, `live-restore`. `alarm` is in the `docker` group |
 | AI | Ollama as a container (`/opt/tetris-server/ai/compose.yaml`, `tetris-ai.service`), API on port 11434, CPU only. Optional web chat (Open WebUI, port 3000) |
 | Memory | zram swap (half the RAM, zstd), `systemd-oomd`. The Halium container stays off (frees its RAM) unless you keep the modem |
 | Off | Phosh, sensors, vibration, torch, GPS, fingerprint, Bluetooth, modem (keep it with `--with-modem`) |
 
-### Setting it up
+#### Setting it up
 
-The server kernel must be on slot b first (all modules are rebuilt, `vendor_boot_b` too):
+The kernel of this tree must be on slot b first (all modules are rebuilt, `vendor_boot_b` too):
 
 ```sh
-git switch server
 scripts/build-kernel.sh && scripts/build-debug-boot.sh
 scripts/flash-debug-b.sh            # phone in fastboot
 ```
@@ -147,7 +163,7 @@ or build a fresh server image: `sudo PROFILE=server scripts/build-rootfs.sh` and
 it to `userdata` as described above (the second stage, `setup-phone.sh`, is only needed
 for the phone profile and for the modem).
 
-### Using it
+#### Using it
 
 ```sh
 ssh alarm@tetris.local                               # or alarm@172.16.42.1 over USB
@@ -176,7 +192,7 @@ curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"
 - The phone runs on the charger all the time: keep it cool and out of direct sun.
 - Back to the phone: `sudo tetris-mode phone && sudo reboot`.
 
-## Desktop profile (branch `desktop`)
+### Desktop profile
 
 The server profile plus a full GNOME desktop that you use over **RDP** from a PC, tablet
 or another phone (Remmina, FreeRDP, Windows' Remote Desktop, Microsoft's RDP apps). The
@@ -193,13 +209,12 @@ panel stays off; GNOME runs as a headless session of `alarm`, **renders on the M
 | Fallback | Without the container, glvnd uses Mesa. A GPU shell that dies within 60 s switches the session to software for that boot (`tetris-gnome-shell`). Off for good: `touch ~/.config/tetris-no-gpu` |
 | Memory | ~850 MB used after boot with GNOME, Docker and Ollama idle (CPU rendering; the container adds its share with the GPU) |
 
-### Setting it up
+#### Setting it up
 
 ```sh
-git switch desktop
 scripts/build-kernel.sh && scripts/build-debug-boot.sh
 scripts/flash-debug-b.sh            # phone in fastboot
-scripts/push-modules.sh             # modules for the new kernel (when coming from main)
+scripts/push-modules.sh             # modules for the new kernel (after a kernel change)
 scripts/setup-desktop.sh            # server + desktop profile, prints the RDP password
 ```
 
@@ -214,7 +229,10 @@ with user `alarm` and the RDP password. GNOME takes the resolution the client as
 tetris.local /f` full screen over WLAN; with other clients set 1920×1080 (or full
 screen) in the connection settings. The session is the logged-in GNOME of `alarm`; the desktop keeps
 running when you disconnect. New RDP password: `tetris-rdp-setup` on the phone.
-Back: `sudo tetris-mode server` or `sudo tetris-mode phone`, then reboot.
+Back: `sudo tetris-mode server` or `sudo tetris-mode phone`, then reboot (after a one-boot
+desktop: just reboot, or press the power key). Known: with the panel out of seat0, logind
+can still report seat0 as graphical, and GDM tries (and gives up on) a local login screen
+three times at boot; `tetris-display-off` holds the panel, so nothing shows.
 
 ## Risks
 

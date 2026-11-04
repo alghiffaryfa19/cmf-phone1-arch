@@ -1,0 +1,6 @@
+[Unit]
+Description=Reboot once as %i (server or desktop), then back to the phone
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tetris-boot-once %i

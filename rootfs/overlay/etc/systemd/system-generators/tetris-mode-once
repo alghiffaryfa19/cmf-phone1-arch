@@ -1,0 +1,46 @@
+#!/bin/sh
+# One boot as server or desktop, then back to the phone: "Start as server" / "Start as
+# desktop" (tetris-boot-as) write /var/lib/tetris-mode/once and reboot. This generator
+# turns that into the profile for this boot only, everything under /run (gone on the
+# next boot); tetris-mode-once-done.service then deletes the file. The persistent
+# profiles of tetris-mode are not touched.
+#   $1 normal, $2 early (wins over /etc), $3 late generator directory
+F=/var/lib/tetris-mode/once
+[ -r "$F" ] || exit 0
+mode=$(cat "$F")
+case $mode in server|desktop) ;; *) exit 0 ;; esac
+E=$2
+U=/usr/lib/systemd/system
+S=/etc/systemd/system
+
+mkdir -p /run/tetris-mode && echo "$mode" > /run/tetris-mode/once
+# Phone services off for this boot (runtime masks beat what /etc enables)
+for u in tetris-phosh tetris-sensors tetris-vibra tetris-torch tetris-gnss tetris-fp \
+         bluetooth tetris-bt-bridge ModemManager tetris-modem; do
+    ln -sf /dev/null "$E/$u.service"
+done
+# Server part (Docker, Ollama, mDNS, panel off); the *.wants entries only need the name
+mkdir -p "$E/multi-user.target.wants"
+for u in tetris-display-off docker avahi-daemon systemd-oomd tetris-ai tetris-mode-once-done; do
+    ln -sf "$S/$u.service" "$E/multi-user.target.wants/$u.service"
+done
+# WLAN power save off (it delays incoming connections), short press on the power key
+# reboots back into the phone
+mkdir -p /run/NetworkManager/conf.d /run/systemd/logind.conf.d
+printf '[connection]\nwifi.powersave = 2\n' > /run/NetworkManager/conf.d/zz-tetris-headless.conf
+printf '[Login]\nHandlePowerKey=reboot\n' > /run/systemd/logind.conf.d/90-tetris-mode-once.conf
+
+if [ "$mode" = desktop ]; then
+    # GNOME over RDP: GDM + headless session, the container for the GPU, panel out of seat0
+    touch /run/tetris-headless-seat
+    ln -sf "$U/graphical.target" "$E/default.target"
+    ln -sf "$U/gdm.service" "$E/display-manager.service"
+    mkdir -p "$E/graphical.target.wants"
+    ln -sf "$U/gnome-headless-session@.service" "$E/graphical.target.wants/gnome-headless-session@alarm.service"
+    ln -sf "$S/tetris-android.service" "$E/graphical.target.wants/tetris-android.service"
+    # RDP certificate and password on the first desktop boot (user unit)
+    mkdir -p /run/systemd/user/default.target.wants
+    ln -sf /etc/systemd/user/tetris-rdp-setup.service /run/systemd/user/default.target.wants/
+else
+    ln -sf "$U/multi-user.target" "$E/default.target"
+fi

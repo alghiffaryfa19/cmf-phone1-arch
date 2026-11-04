@@ -32,7 +32,8 @@ wait_for() {
 }
 wait_for android.hardware.graphics.allocator.IAllocator/default || exit 1
 # Desktop profile: glvnd may load libhybris now (user-environment-generators/60-tetris-hybris-gl)
-if [ -e /etc/tetris-headless-seat ] && [ -e /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 ]; then
+if { [ -e /etc/tetris-headless-seat ] || [ -e /run/tetris-headless-seat ]; } &&
+        [ -e /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 ]; then
     mkdir -p /run/tetris-hybris
     printf '{ "file_format_version": "1.0.0", "ICD": { "library_path": "%s" } }\n' \
         /opt/libhybris-glvnd/lib/libEGL_libhybris.so.0 > /run/tetris-hybris/10_libhybris.json

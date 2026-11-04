@@ -1,0 +1,8 @@
+#!/bin/sh
+# Root part of tetris-boot-as: mark the next boot as server or desktop and reboot.
+set -eu
+case ${1:-} in server|desktop) ;; *) echo "usage: tetris-boot-once server|desktop" >&2; exit 1 ;; esac
+mkdir -p /var/lib/tetris-mode
+echo "$1" > /var/lib/tetris-mode/once
+sync
+systemctl reboot

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Als Desktop starten
+Comment=Einmal als GNOME-Desktop über RDP neu starten; danach wieder Telefon
+Exec=tetris-boot-as desktop
+Icon=computer
+Categories=System;
+OnlyShowIn=Phosh;
+X-Purism-FormFactor=Workstation;Mobile;
