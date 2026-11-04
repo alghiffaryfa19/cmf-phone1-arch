@@ -1,0 +1,17 @@
+[Unit]
+Description=Server profile: Ollama container (/opt/tetris-server/ai)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The first start pulls the image (~2 GB): retry until there is internet
+ExecStart=/usr/bin/docker compose -f /opt/tetris-server/ai/compose.yaml up -d ollama
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

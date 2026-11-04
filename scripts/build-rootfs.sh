@@ -2,6 +2,7 @@
 # Build the Arch Linux ARM rootfs image for CMF Phone 1 (Tetris).  Run as root:
 #   sudo scripts/build-rootfs.sh
 #   sudo scripts/build-rootfs.sh --finish   # re-apply overlay/services + shrink on an existing image
+#   sudo PROFILE=server scripts/build-rootfs.sh   # headless server: Docker, Ollama, no Phosh
 # Output: out/rootfs.img (raw ext4) + out/rootfs.simg (sparse, for `fastboot flash userdata`).
 # The image is small; the phone grows it to the full userdata partition on first boot.
 set -euo pipefail
@@ -17,6 +18,8 @@ KVER=$(cat "$KOUT/include/config/kernel.release")
 STRIP=$P/toolchain/clang-r487747c/bin/llvm-strip
 OWNER=$(stat -c %u:%g "$P")
 SIZE=${SIZE:-10G}
+PROFILE=${PROFILE:-phone}
+[[ $PROFILE == phone || $PROFILE == server ]] || { echo "PROFILE must be phone or server"; exit 1; }
 
 PACKAGES=(
     # UI
@@ -31,6 +34,12 @@ PACKAGES=(
     # Halium container for the Android HALs (GPU, modem, camera)
     lxc
 )
+# Server profile (rootfs/overlay-server, tetris-mode): containers, mDNS
+# name tetris.local, compressed swap. Ollama runs as a container (tetris-ai.service);
+# Arch Linux ARM has no ollama package. The phone packages stay installed so that
+# `tetris-mode phone` can switch back.
+SERVER_PACKAGES=(docker docker-compose docker-buildx avahi nss-mdns zram-generator)
+[[ $PROFILE == server ]] && PACKAGES+=("${SERVER_PACKAGES[@]}")
 
 cleanup() {
     mountpoint -q "$MNT" && umount -R "$MNT" || true
@@ -69,10 +78,14 @@ fi
 
 echo "== overlay"
 cp -a "$P/rootfs/overlay/." "$MNT/"
+[[ $PROFILE == server ]] && cp -a "$P/rootfs/overlay-server/." "$MNT/"
 # stock vendor firmware (scripts/extract-vendor.sh), see firmware_class.path=/vendor/firmware
 mkdir -p "$MNT/vendor"; rm -rf "$MNT/vendor/firmware"
 cp -a "$OUT/vendor-extract/vendor/firmware" "$MNT/vendor/"; chown -R 0:0 "$MNT/vendor"
 chown -R 0:0 "$MNT/etc/sudoers.d" "$MNT/etc/systemd" "$MNT/etc/NetworkManager" "$MNT/etc/modprobe.d"
+if [[ $PROFILE == server ]]; then
+    chown -R 0:0 "$MNT/etc/ssh/sshd_config.d" "$MNT/etc/docker" "$MNT/etc/sysctl.d" "$MNT/usr/local/bin/tetris-mode" "$MNT/opt/tetris-server"
+fi
 chmod 0440 "$MNT/etc/sudoers.d/10-wheel"
 chmod 0600 "$MNT/etc/NetworkManager/conf.d/"*.conf "$MNT/etc/NetworkManager/system-connections/"*.nmconnection
 
@@ -122,6 +135,11 @@ echo "== tetris-torch"
     -fuse-ld=lld -O2 -Wall -Wextra \
     -o "$MNT/usr/local/bin/tetris-torch" "$P/rootfs/src/tetris-torch/tetris-torch.c"
 chown 0:0 "$MNT/usr/local/bin/tetris-torch"
+echo "== tetris-display-off"
+"$P/toolchain/clang-r487747c/bin/clang" --target=aarch64-linux-gnu --sysroot="$MNT" \
+    -fuse-ld=lld -O2 -Wall -Wextra \
+    -o "$MNT/usr/local/bin/tetris-display-off" "$P/rootfs/src/tetris-display-off.c"
+chown 0:0 "$MNT/usr/local/bin/tetris-display-off"
 echo "== tetris-sensors (needs glib's gio from the rootfs)"
 "$P/toolchain/clang-r487747c/bin/clang" --target=aarch64-linux-gnu --sysroot="$MNT" \
     -fuse-ld=lld -O2 -Wall \
@@ -143,6 +161,10 @@ arch-chroot "$MNT" /bin/bash -euxo pipefail -c "
     systemctl mask iio-sensor-proxy  # no IIO sensors here; tetris-sensors serves its D-Bus API
     systemctl --global enable sm.puri.Chatty-daemon  # SMS arrive while the Chats window is closed
     systemctl set-default graphical.target
+    if [[ $PROFILE == server ]]; then
+        usermod -aG docker alarm
+        /usr/local/bin/tetris-mode server
+    fi
     rm -rf /var/cache/pacman/pkg/*
     rm -rf /etc/systemd/system/phosh.service.d  # leftover from an earlier overlay
 "

@@ -1,0 +1,12 @@
+[Unit]
+Description=Server profile: panel off (DPMS) while no compositor runs
+After=tetris-splash-stop.service systemd-udev-settle.service
+Conflicts=tetris-phosh.service
+
+[Service]
+ExecStart=/usr/local/bin/tetris-display-off
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

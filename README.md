@@ -108,6 +108,66 @@ scripts/setup-phone.sh /path/to/halium/system.img
 
 The user is `alarm` with password `alarm`. **Change it** (`passwd`), because SSH is on.
 
+## Server profile (branch `server`)
+
+The phone as a small always-on server: no Phosh, panel off, reachable over USB and WLAN,
+runs Docker containers and local AI models (Ollama). `tetris-mode` switches between
+the server and the phone profile; both stay installed.
+
+| | |
+|---|---|
+| Kernel | Docker options on top of the phone config (`kernel/linux.config`, "Server profile"): nftables + iptables compat, `br_netfilter`, `xt_addrtype`, IPv6 NAT, CFS bandwidth (`--cpus`), IPVS, VXLAN/IPVLAN |
+| Display | `tetris-display-off` switches the panel off (DRM DPMS) and holds DRM master |
+| Network | USB: `172.16.42.1` (as before). WLAN: NetworkManager, power save **off** (it delays incoming connections by a beacon interval). mDNS name `tetris.local` (Avahi) |
+| SSH | Keys only (`etc/ssh/sshd_config.d/50-tetris-server.conf`): the project key and the PC user's keys are installed |
+| Docker | `overlay2` on the ext4 rootfs, logs capped at 3 × 10 MB per container, `live-restore`. `alarm` is in the `docker` group |
+| AI | Ollama as a container (`/opt/tetris-server/ai/compose.yaml`, `tetris-ai.service`), API on port 11434, CPU only. Optional web chat (Open WebUI, port 3000) |
+| Memory | zram swap (half the RAM, zstd), `systemd-oomd`. The Halium container stays off (frees its RAM) unless you keep the modem |
+| Off | Phosh, sensors, vibration, torch, GPS, fingerprint, Bluetooth, modem (keep it with `--with-modem`) |
+
+### Setting it up
+
+The server kernel must be on slot b first (all modules are rebuilt, `vendor_boot_b` too):
+
+```sh
+git switch server
+scripts/build-kernel.sh && scripts/build-debug-boot.sh
+scripts/flash-debug-b.sh            # phone in fastboot
+```
+
+Then either convert the installed phone (keeps `userdata`; needs internet on the phone).
+The new kernel refuses the old modules in the rootfs, so push the new ones first:
+
+```sh
+scripts/push-modules.sh             # modules matching the flashed kernel
+scripts/setup-server.sh             # or --with-modem for mobile data as uplink
+```
+
+or build a fresh server image: `sudo PROFILE=server scripts/build-rootfs.sh` and flash
+it to `userdata` as described above (the second stage, `setup-phone.sh`, is only needed
+for the phone profile and for the modem).
+
+### Using it
+
+```sh
+ssh alarm@tetris.local                               # or alarm@172.16.42.1 over USB
+docker context create tetris --docker host=ssh://alarm@tetris.local
+docker --context tetris run --rm hello-world         # Docker from the PC, runs on the phone
+docker --context tetris exec -it ollama ollama pull qwen3:1.7b
+curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"Hallo"}'
+```
+
+- `tetris.local` needs mDNS on the PC (`nss-mdns`, `mdns_minimal` in `/etc/nsswitch.conf`);
+  without it use the WLAN address.
+- The first boot pulls the Ollama image (~3 GB, takes a while); `journalctl -u tetris-ai`.
+- Images must be `linux/arm64`. For x86-only images, build arm64 ones yourself
+  (`docker buildx build --platform linux/arm64`).
+- AI models run on the CPU (4 × Cortex-A78 + 4 × Cortex-A55). Models of 1–4 B
+  parameters in Q4 are practical; RAM decides the upper limit. Neither the Mali GPU nor the
+  MediaTek APU can be used from Linux containers.
+- The phone runs on the charger all the time: keep it cool and out of direct sun.
+- Back to the phone: `sudo tetris-mode phone && sudo reboot`.
+
 ## Risks
 
 - **Never relock the bootloader** while a custom kernel is on the phone or AVB is off.

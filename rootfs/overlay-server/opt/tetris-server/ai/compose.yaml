@@ -1,0 +1,40 @@
+# Local AI models on the phone's CPU (the Mali GPU and the APU are not usable from
+# Linux). Started by tetris-ai.service; Ollama's API is on port 11434 of every interface
+# (USB 172.16.42.1, WLAN, tetris.local) without authentication: trusted networks only.
+#
+#   docker exec -it ollama ollama pull qwen3:1.7b
+#   curl http://tetris.local:11434/api/generate -d '{"model":"qwen3:1.7b","prompt":"Hallo"}'
+#
+# Web chat (Open WebUI, needs ~1 GB RAM more):
+#   docker compose -f /opt/tetris-server/ai/compose.yaml --profile webui up -d   -> port 3000
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      # one model at a time, RAM is the limit on a phone
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_KEEP_ALIVE: "10m"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    profiles: [webui]
+    restart: unless-stopped
+    depends_on: [ollama]
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+
+volumes:
+  ollama:
+  open-webui:
