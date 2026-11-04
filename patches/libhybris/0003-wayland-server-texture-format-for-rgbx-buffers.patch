@@ -1,0 +1,22 @@
+--- a/hybris/egl/platforms/common/eglplatformcommon.cpp	2026-11-04 15:57:06.138569694 +0000
++++ b/hybris/egl/platforms/common/eglplatformcommon.cpp	2026-11-04 15:57:06.178569726 +0000
+@@ -86,12 +86,19 @@
+ 	ANativeWindowBuffer* anwb = (ANativeWindowBuffer *) buf->buf;
+ 
+ 	if (attribute == EGL_TEXTURE_FORMAT) {
++		// Compositors (mutter) accept only EGL_TEXTURE_RGB/RGBA for EGL Wayland
++		// buffers: "Unsupported buffer format 12762" (EXTERNAL_WL) was a protocol
++		// error for clients with an EGL config without alpha (SDL games: RGBX).
+ 		switch(anwb->format) {
+ 		case HAL_PIXEL_FORMAT_RGB_565:
++		case HAL_PIXEL_FORMAT_RGBX_8888:
++		case HAL_PIXEL_FORMAT_RGB_888:
+ 			*value = EGL_TEXTURE_RGB;
+ 			break;
+ 		case HAL_PIXEL_FORMAT_RGBA_8888:
+ 		case HAL_PIXEL_FORMAT_BGRA_8888:
++		case HAL_PIXEL_FORMAT_RGBA_1010102:
++		case HAL_PIXEL_FORMAT_RGBA_FP16:
+ 			*value = EGL_TEXTURE_RGBA;
+ 			break;
+ 		default:
